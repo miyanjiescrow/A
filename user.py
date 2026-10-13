@@ -123,16 +123,22 @@ def resume_user_action(bot: TeleBot, chat_id: int, user_id: int, callback_data: 
 def send_contract_pdf_to_parties(bot: TeleBot, contract: dict):
     """
     تولید و ارسال خودکار PDF (به صورت غیرمسدودکننده در ترد جداگانه).
+    اطلاعات کاربران را به PDF generator منتقل می‌کند.
     """
     def _task():
         buyer_id = contract.get("buyer_id")
         seller_id = contract.get("seller_id")
         cid = contract.get("contract_id") or contract.get("id", "---")
 
+        # ✅ واکشی اطلاعات کاربران برای PDF
+        buyer_user = db.get_user(buyer_id) if buyer_id else None
+        seller_user = db.get_user(seller_id) if seller_id else None
+
         try:
             logger.info(f"🔄 [AUTO_PDF_START] Generating PDF for deal {cid}...")
             # این عملیات سنگین است و در ترد جداگانه اجرا می‌شود
-            pdf_buffer = pdf_generator.build_contract_pdf(contract)
+            # ✅ pass buyer_user and seller_user to PDF generator
+            pdf_buffer = pdf_generator.build_contract_pdf(contract, buyer_user=buyer_user, seller_user=seller_user)
             pdf_bytes = pdf_buffer.getvalue()
             
             if len(pdf_bytes) < 100:
@@ -184,6 +190,7 @@ def send_contract_pdf_to_parties(bot: TeleBot, contract: dict):
             logger.warning(f"ارسال بایگانی PDF معامله {cid} به MJNOTE ناموفق بود: {e}")
             
     executor.submit(_task)
+
 
 
 def build_draft_preview_text(state_data: dict) -> str:
@@ -1732,13 +1739,27 @@ def register_user_handlers(bot: TeleBot):
 
         markup = kb.get_contract_action_keyboard(cid, "employer" if role == "کارفرما" else "freelancer", status, has_ms, bool(c.get("staged_payment")), show_terms_button=show_terms_button, contract=c)
         
+        sent_msg = None
         if message_id:
             try:
                 bot.edit_message_text(text, chat_id, message_id, parse_mode="MarkdownV2", reply_markup=markup)
+                sent_msg = message_id
             except Exception:
-                bot.send_message(chat_id, text, parse_mode="MarkdownV2", reply_markup=markup)
+                sent_msg = bot.send_message(chat_id, text, parse_mode="MarkdownV2", reply_markup=markup).message_id
         else:
-            bot.send_message(chat_id, text, parse_mode="MarkdownV2", reply_markup=markup)
+            sent_msg = bot.send_message(chat_id, text, parse_mode="MarkdownV2", reply_markup=markup).message_id
+
+        # ✅ Store message ID in state for deletion later
+        # ذخیره message_id در state برای حذف بعدی (زمانی که هر دو طرف امضا کنند)
+        try:
+            _, state_data = db.get_user_state(user_id)
+            if not state_data:
+                state_data = {}
+            state_data["old_contract_card_msg_id"] = sent_msg
+            db.set_user_state(user_id, db.get_user_state(user_id)[0], state_data)
+        except Exception as e:
+            logger.warning(f"Could not store message ID in state: {e}")
+
 
     def send_contracts_page(chat_id: int, user_id: int, contracts: list, offset: int, category: str = "all"):
         page = contracts[offset:offset + PAGE_SIZE]
@@ -3574,6 +3595,25 @@ def register_user_handlers(bot: TeleBot):
         seller_id = contract.get("seller_id")
 
         logger.info(f"🏁 [POST_SIGN] Finalizing deal {cid}. Staged: {is_staged}")
+
+    # ✅ FIX: Delete old contract card messages before celebrating
+    # حذف پیام‌های قدیمی (کارت دعوت و دکمه‌های امضا)
+    for uid in {u for u in (buyer_id, seller_id) if u}:
+        try:
+            _, state_data = db.get_user_state(uid)
+            if state_data:
+                old_msg_id = state_data.get("old_contract_card_msg_id")
+                if old_msg_id:
+                    try:
+                        bot.delete_message(uid, old_msg_id)
+                        logger.info(f"✅ Deleted old contract card message {old_msg_id} for user {uid}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete old message {old_msg_id} for user {uid}: {e}")
+            # پاکسازی state برای این کاربر
+            db.clear_user_state(uid)
+        except Exception as e:
+            logger.warning(f"Error clearing state for user {uid}: {e}")
+
 
         # ۱. ارسال سند رسمی به هر دو طرف و MJNOTE
         send_contract_pdf_to_parties(bot, contract)
@@ -7266,11 +7306,41 @@ def register_user_handlers(bot: TeleBot):
         )
 
     @bot.callback_query_handler(func=lambda call: call.data == "back_to_menu")
+    @bot.callback_query_handler(func=lambda call: call.data == "back_to_menu")
     def back_to_menu_callback(call: CallbackQuery):
+        """✅ Fixed: Only clear FSM states, preserve authentication"""
         user_id = call.from_user.id
         is_admin = (user_id == getattr(config, 'ADMIN_ID', 0) or user_id in getattr(config, 'ADMIN_IDS', []))
         bot.answer_callback_query(call.id)
-        db.clear_user_state(user_id)
+        
+        # ✅ FIX: Only clear FSM state, don't clear user authentication/session
+        current_state, state_data = db.get_user_state(user_id)
+        
+        # List of states that should be cleared (FSM workflow states only)
+        CLEARING_STATES = {
+            "WAITING_ROLE_SELECTION", "WAITING_CATEGORY_SELECTION",
+            "WAITING_WIZARD_TITLE", "WAITING_WIZARD_AMOUNT",
+            "WAITING_WIZARD_DEADLINE_CUSTOM", "WAITING_WIZARD_MS_ASK",
+            "WAITING_WIZARD_MS_TEMPLATE", "WAITING_WIZARD_MS_CUSTOM_PCT",
+            "WAITING_WIZARD_MS_MANUAL", "WAITING_WIZARD_REC_ASK",
+            "WAITING_WIZARD_DESC", "WAITING_PREVIEW_CONFIRM",
+            "WAITING_CUSTOM_FREE_EDITS", "WAITING_FIELD_EDIT",
+            "WAITING_SIGN_PHONE", "WAITING_WORK_PHONE",
+            "WAITING_SECOND_PARTY_FULLNAME", "WAITING_SECOND_PARTY_NATIONAL_ID",
+            "WAITING_SECOND_PARTY_PHONE",
+            "WAITING_RECEIPT_PHOTO", "WAITING_MS_RECEIPT_PHOTO",
+            "WAITING_DELIVERY_FILE", "WAITING_MS_DELIVERY_FILE",
+            "WAITING_SIGN_FULLNAME",
+            "WAITING_DISPUTE_DESCRIPTION", "WAITING_DISPUTE_FILE",
+            "WAITING_EDIT_PRICE_AMOUNT",
+            "WAITING_AMBASSADOR_CHANNEL",
+        }
+        
+        # Only clear if in an active FSM state
+        if current_state in CLEARING_STATES:
+            db.clear_user_state(user_id)
+        # Otherwise: DON'T clear state to preserve authentication
+        
         bot.send_message(
             call.message.chat.id,
             "👈 بازگشتید به منوی اصلی.",
@@ -7278,36 +7348,6 @@ def register_user_handlers(bot: TeleBot):
             reply_markup=_get_main_menu_for_user(user_id, is_admin)
         )
 
-    # ====================================================
-    # Catch-all: فقط زمانی که کاربر در هیچ FSM state فعالی نیست
-    # این handler باید آخرین message_handler ثبت شده باشد.
-    # ====================================================
-    _ACTIVE_FSM_STATES = {
-        "WAITING_ROLE_SELECTION", "WAITING_CATEGORY_SELECTION",
-        "WAITING_WIZARD_TITLE", "WAITING_WIZARD_AMOUNT",
-        "WAITING_WIZARD_DEADLINE_CUSTOM", "WAITING_WIZARD_MS_ASK",
-        "WAITING_WIZARD_MS_TEMPLATE", "WAITING_WIZARD_MS_CUSTOM_PCT",
-        "WAITING_WIZARD_MS_MANUAL", "WAITING_WIZARD_REC_ASK",
-        "WAITING_WIZARD_DESC", "WAITING_PREVIEW_CONFIRM",
-        "WAITING_CUSTOM_FREE_EDITS", "WAITING_FIELD_EDIT",
-        "WAITING_SIGN_PHONE", "WAITING_WORK_PHONE",
-        "WAITING_SECOND_PARTY_FULLNAME", "WAITING_SECOND_PARTY_NATIONAL_ID",
-        "WAITING_SECOND_PARTY_PHONE",
-        "WAITING_RECEIPT_PHOTO", "WAITING_MS_RECEIPT_PHOTO",
-        "WAITING_DELIVERY_FILE", "WAITING_MS_DELIVERY_FILE",
-        "WAITING_FULL_NAME", "WAITING_PROFILE_FULLNAME", "WAITING_SIGN_FULLNAME",
-        "EDITING_FULLNAME", "EDITING_NATIONAL_ID",
-        "WAITING_CARD_NUMBER", "WAITING_CARD_SHEBA", "WAITING_CARD_HOLDER_NAME", "WAITING_CARD_LABEL",
-        "WAITING_WALLET_WITHDRAW_SHEBA", "WAITING_WALLET_CONFIRM_SHEBA",
-        "WAITING_WITHDRAW_AMOUNT", "WAITING_WITHDRAW_METHOD",
-        "WAITING_WITHDRAW_SHEBA", "WAITING_WITHDRAW_HOLDER_NAME",
-        "WAITING_DISPUTE_DESCRIPTION", "WAITING_DISPUTE_FILE",
-        "WAITING_EDIT_PRICE_AMOUNT",
-        "WAITING_AMBASSADOR_CHANNEL",
-    }
-
-    # ====================================================
-    # دکمه پنل مدیریت برای ادمین‌ها
     # ====================================================
     @bot.message_handler(func=lambda msg: msg.text == "⚡ پنل مدیریت هوشمند")
     def show_admin_panel(message: Message):
