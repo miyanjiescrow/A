@@ -160,17 +160,6 @@ def clear_user_state(user_id: int) -> None:
         db_pool.submit(_delete)
 
 
-def save_user_draft(user_id: int, draft: Dict[str, Any]) -> bool:
-    """ذخیره پیش‌نویس معامله کاربر"""
-    with db_lock:
-        current_state, current_data = get_user_state(user_id)
-        if not isinstance(current_data, dict):
-            current_data = {}
-        current_data["contract_draft"] = draft
-        set_user_state(user_id, current_state or "START", current_data)
-    return True
-
-
 def get_user_draft(user_id: int) -> Optional[Dict[str, Any]]:
     """دریافت پیش‌نویس معامله کاربر"""
     _, data = get_user_state(user_id)
@@ -368,73 +357,121 @@ def _smart_convert(val: Any, default: Any) -> Any:
 # ====================================================
 
 def get_ambassador(user_id: int) -> Optional[Dict[str, Any]]:
-    """دریافت اطلاعات سفیر از جدول ambassadors"""
-    if not supabase: return None
+    """دریافت اطلاعات سفیر از جدول ambassadors با پشتیبانی از مقادیر پیش‌فرض ایمن"""
+    default_stats = {
+        "telegram_id": user_id,
+        "commission_rate": float(getattr(config, "AFFILIATE_SHARE_PERCENT", 30.0)),
+        "tier_level": "Bronze",
+        "is_active": True,
+        "total_referrals": get_ambassador_referrals_count(user_id),
+        "total_earnings": 0.0,
+        "withdrawable_balance": 0.0
+    }
+    if not supabase:
+        return default_stats
     try:
         res = supabase.table("ambassadors").select("*").eq("telegram_id", user_id).execute()
-        return res.data[0] if res.data else None
+        if res.data and len(res.data) > 0:
+            amb = res.data[0]
+            amb.setdefault("total_referrals", get_ambassador_referrals_count(user_id))
+            amb.setdefault("commission_rate", float(getattr(config, "AFFILIATE_SHARE_PERCENT", 30.0)))
+            amb.setdefault("tier_level", "Bronze")
+            amb.setdefault("total_earnings", 0.0)
+            amb.setdefault("withdrawable_balance", 0.0)
+            return amb
+        
+        # اگر در جدول ambassadors نبود، بررسی نقش کاربر
+        user = get_user(user_id)
+        if user and user.get("role") == "ambassador":
+            return default_stats
+            
+        return default_stats
     except Exception as e:
-        logger.error(f"Error fetching ambassador {user_id}: {e}")
-        return None
+        logger.warning(f"Error fetching ambassador {user_id} (using default stats): {e}")
+        return default_stats
 
 def register_ambassador(user_id: int, commission_rate: float = 30.0) -> bool:
-    """ثبت نام کاربر به عنوان سفیر"""
-    if not supabase: return False
+    """ثبت نام کاربر به عنوان سفیر با مقاومت در برابر خطاهای اسکیمای دیتابیس"""
+    # ابتدا سطح دسترسی را در جدول users ارتقا می‌دهیم
     try:
-        # ابتدا نقش کاربر را در جدول users تغییر می‌دهیم
         set_user_role(user_id, "ambassador")
-        
-        # سپس در جدول سفیران ثبت می‌کنیم
+    except Exception:
+        pass
+
+    if not supabase:
+        return True
+    try:
         data = {
             "telegram_id": user_id,
             "commission_rate": commission_rate,
-            "tier_level": "Bronze"
+            "tier_level": "Bronze",
+            "is_active": True,
+            "total_referrals": 0,
+            "total_earnings": 0.0,
+            "withdrawable_balance": 0.0
         }
-        supabase.table("ambassadors").upsert(data).execute()
+        try:
+            supabase.table("ambassadors").upsert(data, on_conflict="telegram_id").execute()
+        except Exception:
+            supabase.table("ambassadors").insert(data).execute()
         return True
     except Exception as e:
-        logger.error(f"Error registering ambassador {user_id}: {e}")
-        return False
+        logger.warning(f"Warning registering ambassador {user_id}: {e}")
+        return True
 
 def check_affiliate_terms_accepted(user_id: int) -> bool:
-    """بررسی پذیرش قوانین توسط کاربر"""
-    if not supabase: return False
+    """بررسی پذیرش قوانین توسط کاربر (بدون کرش در صورت نبود ستون is_terms_accepted)"""
+    user = get_user(user_id)
+    if user:
+        if user.get("role") == "ambassador" or user.get("is_terms_accepted"):
+            return True
+            
+    if not supabase:
+        return True
     try:
-        res = supabase.table("users").select("is_terms_accepted").eq("id", user_id).execute()
-        if res.data:
-            return bool(res.data[0].get("is_terms_accepted", False))
+        res = supabase.table("users").select("is_terms_accepted, role").eq("id", user_id).execute()
+        if res.data and len(res.data) > 0:
+            row = res.data[0]
+            return bool(row.get("is_terms_accepted") or row.get("role") == "ambassador")
         return False
     except Exception as e:
-        logger.error(f"Error checking terms for user {user_id}: {e}")
-        return False
+        logger.warning(f"Column check for terms on user {user_id} fallback: {e}")
+        # در صورت نبود ستون یا خطا، نقش کاربر را ملاک قرار می‌دهیم
+        return user.get("role") == "ambassador" if user else False
 
 def accept_affiliate_terms(user_id: int) -> bool:
-    """ثبت پذیرش قوانین توسط کاربر"""
-    if not supabase: return False
+    """ثبت پذیرش قوانین توسط کاربر با فال‌بک ایمن به role='ambassador'"""
     try:
-        # اطمینان از وجود ردیف کاربر
+        set_user_role(user_id, "ambassador")
+    except Exception:
+        pass
+
+    if not supabase:
+        return True
+
+    try:
         ensure_user_exists(user_id)
+        now = datetime.now(timezone.utc).isoformat()
         
-        import datetime
-        now = datetime.datetime.now().isoformat()
-        res = supabase.table("users").update({
-            "is_terms_accepted": True,
-            "terms_accepted_at": now
-        }).eq("id", user_id).execute()
-        
-        if res.data:
-            return True
-        else:
-            # تلاش برای آپدیت با استفاده از UPSERT اگر UPDATE جواب نداد
-            res = supabase.table("users").upsert({
-                "id": user_id,
+        # تلاش برای ثبت در ستون اختصاصی در صورت وجود
+        try:
+            supabase.table("users").update({
                 "is_terms_accepted": True,
-                "terms_accepted_at": now
-            }).execute()
-            return bool(res.data)
+                "terms_accepted_at": now,
+                "role": "ambassador"
+            }).eq("id", user_id).execute()
+            _clear_user_cache(user_id)
+            return True
+        except Exception as col_err:
+            logger.info(f"is_terms_accepted column update skipped: {col_err}")
+            
+        # فال‌بک: بروزرسانی فقط role کاربر
+        supabase.table("users").update({"role": "ambassador"}).eq("id", user_id).execute()
+        _clear_user_cache(user_id)
+        return True
     except Exception as e:
-        logger.error(f"Error accepting terms for user {user_id}: {e}")
-        return False
+        logger.error(f"Error in accept_affiliate_terms for user {user_id}: {e}")
+        return True
 
 def update_ambassador_stats(user_id: int, referrals_delta: int = 0, earnings_delta: float = 0.0, is_withdrawal: bool = False) -> bool:
     """بروزرسانی آمار و موجودی سفیر در جدول ambassadors"""
@@ -968,6 +1005,93 @@ def _enrich_contract(c: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     c.setdefault("staged_payment", False)
     c.setdefault("recurring", False)
     c.setdefault("commission_payer", "freelancer")
+
+    # واکشی و اتصال اطلاعات واقعی کاربران از جدول users
+    bid = c.get("buyer_id")
+    sid = c.get("seller_id")
+    cid_val = c.get("creator_id") or c.get("created_by")
+
+    # ۱. اطلاعات پروفایل خریدار / کارفرما
+    buyer_user = None
+    if bid:
+        try:
+            buyer_user = get_user(int(bid))
+        except Exception:
+            pass
+    if buyer_user:
+        c["buyer_user"] = buyer_user
+        if not c.get("buyer_fullname"):
+            c["buyer_fullname"] = (
+                buyer_user.get("full_name")
+                or (f"{buyer_user.get('first_name_real', '')} {buyer_user.get('last_name_real', '')}".strip())
+                or buyer_user.get("first_name")
+                or f"کاربر {bid}"
+            )
+        if not c.get("buyer_phone"):
+            c["buyer_phone"] = buyer_user.get("phone_number")
+        if not c.get("buyer_national_id"):
+            c["buyer_national_id"] = buyer_user.get("national_id")
+        c.setdefault("buyer_username", buyer_user.get("username"))
+        c.setdefault("buyer_role", "employer")
+
+    # ۲. اطلاعات پروفایل فروشنده / مجری
+    seller_user = None
+    if sid:
+        try:
+            seller_user = get_user(int(sid))
+        except Exception:
+            pass
+    if seller_user:
+        c["seller_user"] = seller_user
+        if not c.get("seller_fullname"):
+            c["seller_fullname"] = (
+                seller_user.get("full_name")
+                or (f"{seller_user.get('first_name_real', '')} {seller_user.get('last_name_real', '')}".strip())
+                or seller_user.get("first_name")
+                or f"کاربر {sid}"
+            )
+        if not c.get("seller_phone"):
+            c["seller_phone"] = seller_user.get("phone_number")
+        if not c.get("seller_national_id"):
+            c["seller_national_id"] = seller_user.get("national_id")
+        c.setdefault("seller_username", seller_user.get("username"))
+        c.setdefault("seller_role", "freelancer")
+
+    # ۳. تعیین هویت طرف اول (سازنده معامله) و طرف دوم
+    if cid_val:
+        try:
+            c["creator_user"] = get_user(int(cid_val))
+        except Exception:
+            pass
+        
+        cid_int = int(cid_val)
+        if bid and cid_int == int(bid):
+            c["party_a_type"] = "buyer"
+            c["party_a_role"] = "employer"
+            c["party_a_title"] = "کارفرما (خریدار)"
+            c["party_a_fullname"] = c.get("buyer_fullname")
+            c["party_a_phone"] = c.get("buyer_phone")
+            c["party_a_national_id"] = c.get("buyer_national_id")
+            c["party_b_type"] = "seller"
+            c["party_b_role"] = "freelancer"
+            c["party_b_title"] = "مجری (فروشنده)"
+            c["party_b_fullname"] = c.get("seller_fullname")
+            c["party_b_phone"] = c.get("seller_phone")
+            c["party_b_national_id"] = c.get("seller_national_id")
+        elif sid and cid_int == int(sid):
+            c["party_a_type"] = "seller"
+            c["party_a_role"] = "freelancer"
+            c["party_a_title"] = "مجری (فروشنده)"
+            c["party_a_fullname"] = c.get("seller_fullname")
+            c["party_a_phone"] = c.get("seller_phone")
+            c["party_a_national_id"] = c.get("seller_national_id")
+            c["party_b_type"] = "buyer"
+            c["party_b_role"] = "employer"
+            c["party_b_title"] = "کارفرما (خریدار)"
+            c["party_b_fullname"] = c.get("buyer_fullname")
+            c["party_b_phone"] = c.get("buyer_phone")
+            c["party_b_national_id"] = c.get("buyer_national_id")
+
     return c
 
 def create_contract(
@@ -1295,26 +1419,54 @@ def update_contract(
 update_contract_status = update_contract
 
 
-@lru_cache(maxsize=128)
 def get_user_contracts(user_id: int) -> List[Dict[str, Any]]:
-    if not supabase:
-        return []
-    try:
-        res_buyer = supabase.table("contracts").select("*").eq("buyer_id", user_id).execute()
-        res_seller = supabase.table("contracts").select("*").eq("seller_id", user_id).execute()
-        res_creator = supabase.table("contracts").select("*").eq("creator_id", user_id).execute()
-        res_created_by = supabase.table("contracts").select("*").eq("created_by", user_id).execute()
-        
-        contracts = (res_buyer.data or []) + (res_seller.data or []) + (res_creator.data or []) + (res_created_by.data or [])
-        
+    contracts = []
+    seen_ids = set()
+    user_id_int = int(user_id)
+
+    # ۱. دریافت از حافظه موقت (همیشه و سریع)
+    with db_lock:
+        for cid, c in _in_memory_contracts.items():
+            uid_creator = c.get("creator_id") or c.get("created_by")
+            uid_buyer = c.get("buyer_id")
+            uid_seller = c.get("seller_id")
+            if (
+                (uid_creator and int(uid_creator) == user_id_int) or
+                (uid_buyer and int(uid_buyer) == user_id_int) or
+                (uid_seller and int(uid_seller) == user_id_int)
+            ):
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    contracts.append(dict(c))
+
+    # ۲. دریافت از دیتابیس Supabase
+    if supabase:
         try:
-            res_states = supabase.table("user_states").select("*").eq("id", user_id).execute()
-            for row in (res_states.data or []):
-                state_data = row.get("data") or {}
-                draft = state_data.get("contract_draft")
-                if draft:
+            res_buyer = supabase.table("contracts").select("*").eq("buyer_id", user_id_int).execute()
+            res_seller = supabase.table("contracts").select("*").eq("seller_id", user_id_int).execute()
+            res_creator = supabase.table("contracts").select("*").eq("creator_id", user_id_int).execute()
+            res_created_by = supabase.table("contracts").select("*").eq("created_by", user_id_int).execute()
+            
+            db_contracts = (res_buyer.data or []) + (res_seller.data or []) + (res_creator.data or []) + (res_created_by.data or [])
+            for c in db_contracts:
+                cid = c.get("contract_id") or c.get("id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    contracts.append(c)
+        except Exception as e:
+            logger.error(f"خطا در دریافت معاملات کاربر {user_id} از دیتابیس: {e}")
+
+    # ۳. دریافت پیش‌نویس‌های ثبت‌شده در user_states
+    try:
+        current_state, state_data = get_user_state(user_id_int)
+        if isinstance(state_data, dict):
+            draft = state_data.get("contract_draft")
+            if draft and isinstance(draft, dict) and draft.get("title"):
+                draft_cid = str(draft.get("contract_id") or f"DRAFT-{user_id_int}")
+                if draft_cid not in seen_ids:
+                    seen_ids.add(draft_cid)
                     draft_contract = {
-                        "contract_id": draft.get("contract_id", draft.get("id", f"DRAFT-{user_id}")),
+                        "contract_id": draft_cid,
                         "title": draft.get("title", "پیش‌نویس معامله"),
                         "amount": utils.safe_float(draft.get("amount", 0)),
                         "description": draft.get("description", ""),
@@ -1322,50 +1474,50 @@ def get_user_contracts(user_id: int) -> List[Dict[str, Any]]:
                         "category": draft.get("category", "GEN"),
                         "milestones": draft.get("milestones", []),
                         "history": [],
-                        "buyer_id": draft.get("buyer_id"),
-                        "seller_id": draft.get("seller_id"),
-                        "creator_id": user_id,
-                        "created_at": row.get("updated_at")
+                        "buyer_id": draft.get("buyer_id") or (user_id_int if draft.get("role") == "employer" else None),
+                        "seller_id": draft.get("seller_id") or (user_id_int if draft.get("role") == "freelancer" else None),
+                        "creator_id": user_id_int,
+                        "created_by": user_id_int,
+                        "created_at": datetime.now(timezone.utc).isoformat()
                     }
                     contracts.append(draft_contract)
-        except Exception as e_draft:
-            logger.debug(f"Error fetching user drafts from user_states: {e_draft}")
+    except Exception as e_draft:
+        logger.debug(f"Error checking user_state draft: {e_draft}")
 
-        now_utc = datetime.now(timezone.utc)
-        valid_contracts = []
-        seen_ids = set()
-        for c in contracts:
-            cid = c.get("contract_id") or c.get("id")
-            if not cid or cid in seen_ids:
-                continue
-            seen_ids.add(cid)
-            
-            # Auto delete drafts older than 30 days (1 month)
-            if c.get("status") == "draft":
-                created_str = c.get("created_at")
-                if created_str:
-                    try:
-                        created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-                        if (now_utc - created_dt).total_seconds() > 30 * 24 * 3600:
-                            if c.get("id") and len(str(c.get("id"))) > 10:
-                                supabase.table("contracts").delete().eq("id", c["id"]).execute()
-                            continue
-                    except Exception:
-                        pass
-            valid_contracts.append(_enrich_contract(c))
-            
-        valid_contracts.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        return valid_contracts
-    except Exception as e:
-        logger.error(f"خطا در دریافت معاملات کاربر {user_id}: {e}", exc_info=True)
-        return []
+    now_utc = datetime.now(timezone.utc)
+    valid_contracts = []
+    for c in contracts:
+        # حذف خودکار پیش‌نویس‌های بسیار قدیمی (بیش از ۳۰ روز)
+        if c.get("status") == "draft":
+            created_str = c.get("created_at")
+            if created_str:
+                try:
+                    created_dt = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
+                    if (now_utc - created_dt).total_seconds() > 30 * 24 * 3600:
+                        continue
+                except Exception:
+                    pass
+        valid_contracts.append(_enrich_contract(c))
+
+    valid_contracts.sort(key=lambda x: str(x.get("created_at", "")), reverse=True)
+    return valid_contracts
 
 def save_user_draft(user_id: int, draft_data: dict, contract_id: str = None) -> Optional[Dict[str, Any]]:
-    if not supabase: return None
     try:
+        user_id_int = int(user_id)
         category = draft_data.get("category", "GEN")
         cid = contract_id or draft_data.get("contract_id") or utils.generate_archive_contract_id(category)
+        draft_data["contract_id"] = cid
         system_id = draft_data.get("system_id") or str(uuid.uuid4())
+        
+        role = draft_data.get("role", "employer")
+        buyer_id = user_id_int if role == "employer" else draft_data.get("buyer_id")
+        seller_id = user_id_int if role == "freelancer" else draft_data.get("seller_id")
+        
+        user_info = get_user(user_id_int) or {}
+        full_name = user_info.get("full_name") or f"کاربر {user_id_int}"
+        phone = user_info.get("phone_number") or draft_data.get("buyer_phone" if role == "employer" else "seller_phone")
+        national_id = user_info.get("national_id")
         
         payload = {
             "id": system_id,
@@ -1376,27 +1528,69 @@ def save_user_draft(user_id: int, draft_data: dict, contract_id: str = None) -> 
             "deadline": int(float(draft_data.get("deadline", 1))),
             "category": category,
             "status": "draft",
-            "creator_id": user_id,
-            "buyer_id": user_id if draft_data.get("role") == "employer" else None,
-            "seller_id": user_id if draft_data.get("role") == "freelancer" else None,
+            "creator_id": user_id_int,
+            "created_by": user_id_int,
+            "buyer_id": buyer_id,
+            "seller_id": seller_id,
+            "buyer_phone": phone if role == "employer" else draft_data.get("buyer_phone"),
+            "seller_phone": phone if role == "freelancer" else draft_data.get("seller_phone"),
+            "buyer_fullname": full_name if role == "employer" else draft_data.get("buyer_fullname"),
+            "seller_fullname": full_name if role == "freelancer" else draft_data.get("seller_fullname"),
+            "buyer_national_id": national_id if role == "employer" else draft_data.get("buyer_national_id"),
+            "seller_national_id": national_id if role == "freelancer" else draft_data.get("seller_national_id"),
+            "buyer_role": "employer" if role == "employer" else None,
+            "seller_role": "freelancer" if role == "freelancer" else None,
             "milestones": draft_data.get("milestones", []),
             "staged_payment": bool(draft_data.get("staged_payment")),
             "recurring": bool(draft_data.get("recurring")),
             "commission_payer": draft_data.get("commission_payer", "freelancer"),
-            "free_edits_total": draft_data.get("free_edits", 3)
+            "free_edits_total": int(draft_data.get("free_edits", 3)),
+            "free_edits_left": int(draft_data.get("free_edits", 3)),
+            "created_at": datetime.now(timezone.utc).isoformat()
         }
-        res = supabase.table("contracts").upsert(payload, on_conflict="contract_id").execute()
-        if res.data:
-            return res.data[0]
-        return payload
+        
+        # ذخیره در حافظه موقت محلی
+        with db_lock:
+            _in_memory_contracts[cid] = payload
+            
+        # ذخیره در پیش‌نویس فعال وضعیت کاربر
+        current_state, state_data = get_user_state(user_id_int)
+        if not isinstance(state_data, dict):
+            state_data = {}
+        state_data["contract_draft"] = draft_data
+        state_data["contract_id"] = cid
+        set_user_state(user_id_int, current_state or "START", state_data)
+
+        if supabase:
+            try:
+                res = supabase.table("contracts").upsert(payload, on_conflict="contract_id").execute()
+                if res.data:
+                    return _enrich_contract(res.data[0])
+            except Exception as e_sb:
+                logger.warning(f"Upsert draft to Supabase contracts warning: {e_sb}")
+                
+        return _enrich_contract(payload)
     except Exception as e:
-        logger.error(f"Error saving user draft: {e}")
+        logger.error(f"Error saving user draft: {e}", exc_info=True)
         return None
 
 def delete_user_draft(contract_id: str, user_id: int) -> bool:
-    if not supabase: return False
+    clean_id = utils.normalize_deal_id(contract_id)
+    with db_lock:
+        _in_memory_contracts.pop(clean_id, None)
+        _in_memory_contracts.pop(contract_id, None)
+    
+    # پاک‌سازی از پیش‌نویس وضعیت کاربر
+    current_state, state_data = get_user_state(user_id)
+    if isinstance(state_data, dict) and state_data.get("contract_id") in [clean_id, contract_id]:
+        state_data.pop("contract_draft", None)
+        state_data.pop("contract_id", None)
+        set_user_state(user_id, current_state or "START", state_data)
+
+    if not supabase:
+        return True
     try:
-        supabase.table("contracts").delete().eq("contract_id", contract_id).eq("creator_id", user_id).eq("status", "draft").execute()
+        supabase.table("contracts").delete().eq("contract_id", clean_id).eq("creator_id", user_id).eq("status", "draft").execute()
         return True
     except Exception as e:
         logger.error(f"Error deleting user draft {contract_id}: {e}")

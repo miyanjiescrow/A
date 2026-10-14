@@ -589,7 +589,7 @@ def get_contract_action_keyboard(contract_id: str, user_role: str, status: str, 
         elif user_role == "freelancer":
             markup.add(InlineKeyboardButton("⏳ در انتظار پرداخت کارفرما", callback_data="none"))
 
-    if status == "pending_approval":
+    if status in ["pending_approval", "pending_party_b"]:
         if not user_has_signed:
             markup.add(InlineKeyboardButton("✍️ امضا و تایید قرارداد", callback_data=f"sign_contract_{contract_id}"))
             markup.add(InlineKeyboardButton("🔄 پیشنهاد تغییر شرایط", callback_data=f"open_negotiation_{contract_id}"))
@@ -599,6 +599,10 @@ def get_contract_action_keyboard(contract_id: str, user_role: str, status: str, 
                 markup.add(InlineKeyboardButton("⏳ در انتظار امضای طرف مقابل", callback_data=f"show_invite_{contract_id}"))
             else:
                 markup.add(InlineKeyboardButton("⏳ در انتظار واریز وجه", callback_data="none"))
+
+    if status == "draft":
+        markup.add(InlineKeyboardButton("🚀 تکمیل و امضای پیش‌نویس", callback_data=f"resume_draft_{contract_id}"))
+        markup.add(InlineKeyboardButton("🗑 حذف پیش‌نویس", callback_data=f"delete_draft_{contract_id}"))
 
     if status == "bargaining":
         if not user_has_signed:

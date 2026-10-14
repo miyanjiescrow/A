@@ -22,12 +22,55 @@ DEFAULT_SETTINGS = {
 }
 
 def is_admin(user_id: int) -> bool:
+    if not user_id:
+        return False
     from config import config
-    return user_id == config.OWNER_ID or user_id == config.ADMIN_ID or user_id in getattr(config, 'ADMIN_IDS', [])
+    try:
+        uid_int = int(str(user_id).strip())
+    except (ValueError, TypeError):
+        return False
+
+    for target in [getattr(config, 'OWNER_ID', None), getattr(config, 'ADMIN_ID', None)]:
+        if target is not None:
+            try:
+                if uid_int == int(str(target).strip()):
+                    return True
+            except (ValueError, TypeError):
+                pass
+
+    raw_admin_ids = getattr(config, 'ADMIN_IDS', [])
+    if isinstance(raw_admin_ids, str):
+        admin_id_list = [x.strip() for x in raw_admin_ids.split(",") if x.strip()]
+    elif isinstance(raw_admin_ids, (list, tuple, set)):
+        admin_id_list = list(raw_admin_ids)
+    else:
+        admin_id_list = []
+
+    for item in admin_id_list:
+        try:
+            clean_item = str(item).split('#')[0].strip()
+            if clean_item and uid_int == int(clean_item):
+                return True
+        except (ValueError, TypeError):
+            continue
+
+    return False
 
 def is_owner(user_id: int) -> bool:
+    if not user_id:
+        return False
     from config import config
-    return user_id == config.OWNER_ID
+    try:
+        uid_int = int(str(user_id).strip())
+        owner_id = getattr(config, 'OWNER_ID', None)
+        if owner_id is not None and uid_int == int(str(owner_id).strip()):
+            return True
+        admin_id = getattr(config, 'ADMIN_ID', None)
+        if admin_id is not None and uid_int == int(str(admin_id).strip()):
+            return True
+    except (ValueError, TypeError):
+        pass
+    return False
 
 def get_setting_value(key: str):
     """دریافت مقدار از دیتابیس یا مقدار پیش‌فرض"""

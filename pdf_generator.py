@@ -519,34 +519,58 @@ def build_contract_pdf(contract_data: dict, buyer_user: dict = None, seller_user
     elements.append(finance_table)
     elements.append(Spacer(1, 10*mm))
 
+    # تعیین طرف اول (ایجادکننده معامله) و طرف دوم
+    creator_id = str(contract_data.get("creator_id") or contract_data.get("created_by") or "")
+    buyer_uid = str(contract_data.get("buyer_id") or buyer_info.get("uid") or "")
+    seller_uid = str(contract_data.get("seller_id") or seller_info.get("uid") or "")
+
+    if creator_id and seller_uid and creator_id == seller_uid:
+        # ایجادکننده معامله مجری (فروشنده) است
+        party_a_info = seller_info
+        party_a_header = f"طرف اول: ایجادکننده ({roles['provider']})"
+        party_a_role_text = f"مجری / {roles['provider']}"
+        party_b_info = buyer_info
+        party_b_header = f"طرف دوم: پذیرنده ({roles['client']})"
+        party_b_role_text = f"کارفرما / {roles['client']}"
+    else:
+        # ایجادکننده معامله کارفرما (خریدار) است (پیش‌فرض)
+        party_a_info = buyer_info
+        party_a_header = f"طرف اول: ایجادکننده ({roles['client']})"
+        party_a_role_text = f"کارفرما / {roles['client']}"
+        party_b_info = seller_info
+        party_b_header = f"طرف دوم: پذیرنده ({roles['provider']})"
+        party_b_role_text = f"مجری / {roles['provider']}"
+
     # --- ۴. اطلاعات طرفین (Parties Info) ---
-    elements.append(Paragraph(reshape_text("مشخصات طرفین قرارداد"), style_h1))
+    elements.append(Paragraph(reshape_text("مشخصات طرفین قرارداد (طرف اول و طرف دوم)"), style_h1))
     elements.append(Spacer(1, 3*mm))
     
     parties_data = [
         [
-            Paragraph(reshape_text(f"ارائه‌دهنده خدمت ({roles['provider']})"), get_para_style('RHeader', bold=True, align=TA_CENTER)),
-            Paragraph(reshape_text(f"گیرنده خدمت ({roles['client']})"), get_para_style('LHeader', bold=True, align=TA_CENTER)),
+            Paragraph(reshape_text(party_a_header), get_para_style('RHeader', bold=True, align=TA_CENTER, color=COLORS["primary"])),
+            Paragraph(reshape_text(party_b_header), get_para_style('LHeader', bold=True, align=TA_CENTER, color=COLORS["primary"])),
         ],
         [
             Table([
-                [Paragraph(reshape_text("نقش:"), style_label), Paragraph(reshape_text(seller_info.get('role', 'نامشخص')), style_value)],  # ✅ نقش فروشنده
-                [Paragraph(reshape_text("نام کامل:"), style_label), Paragraph(reshape_text(seller_info['name']), style_value)],
-                [Paragraph(reshape_text("کد ملی:"), style_label), Paragraph(reshape_text(seller_info['id']), style_value)],
-                [Paragraph(reshape_text("تلفن همراه:"), style_label), Paragraph(reshape_text(seller_info['phone']), style_value)],
-                [Paragraph(reshape_text("وضعیت امضا:"), style_label), Paragraph(reshape_text(seller_info['status_text']), style_value)],
-                [Paragraph(reshape_text("زمان امضا:"), style_label), Paragraph(reshape_text(seller_info['signed_jalali']), style_value)],
-                [Paragraph(reshape_text("شناسه/IP:"), style_label), Paragraph(reshape_text(f"{seller_info.get('uid', '---')} / {seller_info['ip']}"), style_value)],
+                [Paragraph(reshape_text("جایگاه:"), style_label), Paragraph(reshape_text("طرف اول (ایجادکننده)"), style_value)],
+                [Paragraph(reshape_text("نقش حقوقی:"), style_label), Paragraph(reshape_text(party_a_role_text), style_value)],
+                [Paragraph(reshape_text("نام کامل:"), style_label), Paragraph(reshape_text(party_a_info['name']), style_value)],
+                [Paragraph(reshape_text("کد ملی:"), style_label), Paragraph(reshape_text(party_a_info['id']), style_value)],
+                [Paragraph(reshape_text("تلفن همراه:"), style_label), Paragraph(reshape_text(party_a_info['phone']), style_value)],
+                [Paragraph(reshape_text("وضعیت امضا:"), style_label), Paragraph(reshape_text(party_a_info['status_text']), style_value)],
+                [Paragraph(reshape_text("زمان امضا:"), style_label), Paragraph(reshape_text(party_a_info['signed_jalali']), style_value)],
+                [Paragraph(reshape_text("شناسه/IP:"), style_label), Paragraph(reshape_text(f"{party_a_info.get('uid', '---')} / {party_a_info['ip']}"), style_value)],
             ], colWidths=[27*mm, 53*mm]),
 
             Table([
-                [Paragraph(reshape_text("نقش:"), style_label), Paragraph(reshape_text(buyer_info.get('role', 'نامشخص')), style_value)],  # ✅ نقش خریدار
-                [Paragraph(reshape_text("نام کامل:"), style_label), Paragraph(reshape_text(buyer_info['name']), style_value)],
-                [Paragraph(reshape_text("کد ملی:"), style_label), Paragraph(reshape_text(buyer_info['id']), style_value)],
-                [Paragraph(reshape_text("تلفن همراه:"), style_label), Paragraph(reshape_text(buyer_info['phone']), style_value)],
-                [Paragraph(reshape_text("وضعیت امضا:"), style_label), Paragraph(reshape_text(buyer_info['status_text']), style_value)],
-                [Paragraph(reshape_text("زمان امضا:"), style_label), Paragraph(reshape_text(buyer_info['signed_jalali']), style_value)],
-                [Paragraph(reshape_text("شناسه/IP:"), style_label), Paragraph(reshape_text(f"{buyer_info.get('uid', '---')} / {buyer_info['ip']}"), style_value)],
+                [Paragraph(reshape_text("جایگاه:"), style_label), Paragraph(reshape_text("طرف دوم (پذیرنده)"), style_value)],
+                [Paragraph(reshape_text("نقش حقوقی:"), style_label), Paragraph(reshape_text(party_b_role_text), style_value)],
+                [Paragraph(reshape_text("نام کامل:"), style_label), Paragraph(reshape_text(party_b_info['name']), style_value)],
+                [Paragraph(reshape_text("کد ملی:"), style_label), Paragraph(reshape_text(party_b_info['id']), style_value)],
+                [Paragraph(reshape_text("تلفن همراه:"), style_label), Paragraph(reshape_text(party_b_info['phone']), style_value)],
+                [Paragraph(reshape_text("وضعیت امضا:"), style_label), Paragraph(reshape_text(party_b_info['status_text']), style_value)],
+                [Paragraph(reshape_text("زمان امضا:"), style_label), Paragraph(reshape_text(party_b_info['signed_jalali']), style_value)],
+                [Paragraph(reshape_text("شناسه/IP:"), style_label), Paragraph(reshape_text(f"{party_b_info.get('uid', '---')} / {party_b_info['ip']}"), style_value)],
             ], colWidths=[27*mm, 53*mm]),
         ]
     ]

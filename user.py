@@ -1167,7 +1167,13 @@ def register_user_handlers(bot: TeleBot):
             n = getattr(config, "DEFAULT_FREE_EDITS", 3)
 
         draft["free_edits"] = n
-        db.set_user_state(user_id, "WAITING_PREVIEW_CONFIRM", {"contract_draft": draft})
+        category = draft.get("category", "GEN")
+        cid = draft.get("contract_id") or utils.generate_archive_contract_id(category)
+        draft["contract_id"] = cid
+        
+        # ذخیره آنی در دیتابیس با وضعیت draft
+        db.save_user_draft(user_id, draft, contract_id=cid)
+        db.set_user_state(user_id, "WAITING_PREVIEW_CONFIRM", {"contract_draft": draft, "contract_id": cid})
         bot.answer_callback_query(call.id, f"✅ {n} بار ویرایش رایگان انتخاب شد.")
         bot.edit_message_text(
             build_draft_preview_text(draft),
@@ -1194,7 +1200,13 @@ def register_user_handlers(bot: TeleBot):
             return
 
         draft["free_edits"] = int(clean_input)
-        db.set_user_state(user_id, "WAITING_PREVIEW_CONFIRM", {"contract_draft": draft})
+        category = draft.get("category", "GEN")
+        cid = draft.get("contract_id") or utils.generate_archive_contract_id(category)
+        draft["contract_id"] = cid
+        
+        # ذخیره آنی در دیتابیس با وضعیت draft
+        db.save_user_draft(user_id, draft, contract_id=cid)
+        db.set_user_state(user_id, "WAITING_PREVIEW_CONFIRM", {"contract_draft": draft, "contract_id": cid})
         bot.send_message(message.chat.id, f"✅ {draft['free_edits']} بار ویرایش رایگان ثبت شد.")
         bot.send_message(
             message.chat.id,
@@ -1215,21 +1227,35 @@ def register_user_handlers(bot: TeleBot):
         data = state_tuple[1] if isinstance(state_tuple, tuple) and len(state_tuple) > 1 else {}
         draft = data.get("contract_draft", {})
         
+        category = draft.get("category", "GEN")
+        cid = draft.get("contract_id") or data.get("contract_id") or utils.generate_archive_contract_id(category)
+        draft["contract_id"] = cid
+        
+        # اطمینان از ذخیره در دیتابیس با وضعیت draft
+        db.save_user_draft(user_id, draft, contract_id=cid)
+
         # بررسی آستانه احراز هویت (۳ میلیون تومان)
         amount = float(draft.get("amount", 0))
         threshold = float(getattr(config, "IDENTITY_VERIFICATION_THRESHOLD", 3000000))
         needs_national_id = (amount >= threshold)
         
-        user_info = db.get_user(user_id)
-        has_fullname = bool(user_info and user_info.get("full_name"))
-        # اگر کاربر احراز هویت شده باشد یا قبلاً کد ملی ثبت کرده باشد
-        is_verified_user = bool(user_info and user_info.get("is_verified"))
-        has_national_id = bool(user_info and (user_info.get("national_id") or is_verified_user))
+        user_info = db.get_user(user_id) or {}
+        has_fullname = bool(user_info.get("full_name"))
+        is_verified_user = bool(user_info.get("is_verified"))
+        has_national_id = bool(user_info.get("national_id") or is_verified_user)
+
+        signer_name = user_info.get("full_name") or f"کاربر {user_id}"
+        signer_phone = user_info.get("phone_number") or db.get_current_user_phone(user_id) or "ثبت شده"
+        signer_nid = user_info.get("national_id") or "احراز شده"
 
         state_data = {
             "contract_draft": draft,
+            "contract_id": cid,
             "needs_national_id": needs_national_id,
-            "is_creator": True
+            "is_creator": True,
+            "signer_fullname": signer_name,
+            "signer_phone": signer_phone,
+            "signer_national_id": signer_nid
         }
 
         # اگر نام و فامیل ندارد -> اول نام و فامیل
@@ -1260,17 +1286,8 @@ def register_user_handlers(bot: TeleBot):
                 bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb.get_cancel_keyboard())
             return
 
-        # اگر همه چیز اوکی بود -> درخواست تایید امضا
-        sign_text = (
-            "✍️ **امضای قانونی و الکترونیک قرارداد**\n\n"
-            "لطفاً جهت تایید و امضای الکترونیک قرارداد، دکمه «✅ تایید می‌کنم» را لمس کنید:"
-        )
-        db.set_user_state(user_id, "WAITING_SIGN_CONFIRM", state_data)
-
-        try:
-            bot.edit_message_text(sign_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=kb.get_phone_sign_keyboard())
-        except Exception:
-            bot.send_message(call.message.chat.id, sign_text, parse_mode="Markdown", reply_markup=kb.get_phone_sign_keyboard())
+        # نمایش تایید اطلاعات و هدایت به امضا با OTP
+        _go_to_signing_confirm(bot, call.message.chat.id, user_id, state_data)
 
     @bot.callback_query_handler(func=lambda call: call.data == "cancel_draft")
     def cancel_draft_callback(call: CallbackQuery):
@@ -1661,9 +1678,29 @@ def register_user_handlers(bot: TeleBot):
                     # استفاده از نام واقعی احراز شده یا نام تلگرامی
                     other_name = other_user.get("full_name") or other_user.get("first_name", "کاربر")
         
+        # استخراج و غنی‌سازی مشخصات طرف اول (ایجادکننده) و طرف دوم
+        creator_id = c.get("creator_id") or c.get("created_by")
+        creator_is_buyer = (creator_id == c.get("buyer_id")) if (creator_id and c.get("buyer_id")) else True
+        
+        p1_role = "کارفرما (خریدار)" if creator_is_buyer else "مجری (فروشنده)"
+        p1_name = (c.get("buyer_fullname") if creator_is_buyer else c.get("seller_fullname")) or (f"کاربر {creator_id}" if creator_id else "سازنده معامله")
+        p1_phone = (c.get("buyer_phone") if creator_is_buyer else c.get("seller_phone")) or "ثبت نشده"
+        p1_nid = c.get("buyer_national_id") if creator_is_buyer else c.get("seller_national_id")
+        p1_nid_text = f" \| کدملی: `{utils.escape_markdown(str(p1_nid))}`" if p1_nid else ""
+        p1_signed = "✅ امضا شده" if (c.get("buyer_signed_at") if creator_is_buyer else c.get("seller_signed_at")) else "⏳ در انتظار امضا"
+
+        p2_role = "مجری (فروشنده)" if creator_is_buyer else "کارفرما (خریدار)"
+        p2_name = (c.get("seller_fullname") if creator_is_buyer else c.get("buyer_fullname")) or "در انتظار پیوستن طرف دوم"
+        p2_phone = (c.get("seller_phone") if creator_is_buyer else c.get("buyer_phone")) or "ثبت نشده"
+        p2_nid = c.get("seller_national_id") if creator_is_buyer else c.get("buyer_national_id")
+        p2_nid_text = f" \| کدملی: `{utils.escape_markdown(str(p2_nid))}`" if p2_nid else ""
+        p2_signed = "✅ امضا شده" if (c.get("seller_signed_at") if creator_is_buyer else c.get("buyer_signed_at")) else "⏳ در انتظار امضا"
+        
         # ترجمه وضعیت به فارسی (نقشه وضعیت‌ها)
         status_fa_map = {
-            "pending_approval": "🟡 در انتظار امضا",
+            "draft": "📝 پیش‌نویس (در انتظار امضای ایجادکننده)",
+            "pending_party_b": "🟡 در انتظار امضای طرف دوم",
+            "pending_approval": "🟡 در انتظار امضای طرف دوم",
             "bargaining": "🔄 در حال چانه‌زنی",
             "active": "🟢 در حال اجرا",
             "in_progress": "🟢 در حال اجرا",
@@ -1683,13 +1720,6 @@ def register_user_handlers(bot: TeleBot):
         status_fa = status_fa_map.get(status, status)
         
         has_ms = len(c.get("milestones", []) or []) > 0
-        
-        # نمایش شماره تماس‌ها (در صورت وجود بعد از امضا)
-        phones_text = ""
-        if c.get("buyer_phone") or c.get("seller_phone"):
-            b_p = c.get("buyer_phone", "---")
-            s_p = c.get("seller_phone", "---")
-            phones_text = f"\n📞 **طرفین:** `{b_p}` | `{s_p}`"
 
         # نمایش اطلاعات تکمیلی (ویرایش اضافه و مراحل)
         extra_info = ""
@@ -1710,7 +1740,6 @@ def register_user_handlers(bot: TeleBot):
 
         # قالب‌بندی درختی (طراحی پریمیوم)
         safe_title = utils.escape_markdown(title)
-        safe_other_name = utils.escape_markdown(other_name)
         safe_deadline = utils.escape_markdown(str(c.get('deadline', '---')))
 
         payer_fa_map = {
@@ -1723,12 +1752,16 @@ def register_user_handlers(bot: TeleBot):
         text = (
             f"📄 *{safe_title}*\n"
             "──────────────────\n"
-            f"👤 *طرف مقابل:* {safe_other_name}\n"
+            f"👥 *مشخصات طرفین معامله:*\n"
+            f"▫️ *طرف اول \({utils.escape_markdown(p1_role)}\):* {utils.escape_markdown(str(p1_name))} \({p1_signed}\)\n"
+            f"   📱 `{utils.escape_markdown(str(p1_phone))}`{p1_nid_text}\n"
+            f"▫️ *طرف دوم \({utils.escape_markdown(p2_role)}\):* {utils.escape_markdown(str(p2_name))} \({p2_signed}\)\n"
+            f"   📱 `{utils.escape_markdown(str(p2_phone))}`{p2_nid_text}\n"
+            "──────────────────\n"
             f"💰 *مبلغ کل:* **{amount:,.0f} تومان** \({payer_fa}\)\n"
             f"⏱ *مهلت:* **{safe_deadline} روز** \| **{status_fa}**\n"
             "──────────────────\n"
             f"📑 *شناسه:* `{cid}` \| 📅 *ثبت:* {date_str}"
-            f"{phones_text}"
             f"{extra_info}"
         )
 
@@ -3262,53 +3295,76 @@ def register_user_handlers(bot: TeleBot):
         draft = data.get("contract_draft")
         client_ip = data.get("client_ip", "127.0.0.1")
 
-        # الف) اگر سازنده معامله است و قرارداد هنوز ایجاد نشده (از روی پیش‌نویس)
-        if draft and not cid:
-            role = draft.get("role", "employer")
-            buyer_id = user_id if role == "employer" else None
-            seller_id = user_id if role == "freelancer" else None
-            category = draft.get("category", "GEN")
-            cid = utils.generate_archive_contract_id(category)
+        # الف) اگر سازنده معامله (طرف اول) است و قرارداد در حالت پیش‌نویس است
+        is_creator_signing_draft = False
+        if contract and contract.get("status") == "draft" and (contract.get("creator_id") == user_id or str(contract.get("creator_id")) == str(user_id)):
+            is_creator_signing_draft = True
+        elif draft and not cid:
+            is_creator_signing_draft = True
+        elif contract and contract.get("status") == "draft":
+            is_creator_signing_draft = True
+
+        if is_creator_signing_draft:
+            role = (draft.get("role") if draft else None) or ("employer" if contract and contract.get("buyer_id") == user_id else "freelancer")
+            category = (draft.get("category") if draft else None) or (contract.get("category") if contract else "GEN") or "GEN"
+            cid = cid or (contract.get("contract_id") if contract else None) or utils.generate_archive_contract_id(category)
             
-            payload = {
+            updates = {
                 "contract_id": cid,
-                "title": draft.get("title"),
-                "amount": draft.get("amount"),
-                "deadline": draft.get("deadline", 1),
-                "description": draft.get("description", ""),
-                "category": category,
-                "created_by": user_id,
-                "creator_id": user_id,
-                "milestones": draft.get("milestones", []),
-                "staged_payment": bool(draft.get("staged_payment")),
-                "recurring": bool(draft.get("recurring")),
-                "buyer_id": buyer_id,
-                "seller_id": seller_id,
-                "buyer_phone": phone if role == "employer" else None,
-                "seller_phone": phone if role == "freelancer" else None,
-                "buyer_alt_phone": phone if role == "employer" else None,
-                "seller_alt_phone": phone if role == "freelancer" else None,
-                "buyer_signed_at": now if role == "employer" else None,
-                "seller_signed_at": now if role == "freelancer" else None,
-                "buyer_otp_verified": True if role == "employer" else False,
-                "seller_otp_verified": True if role == "freelancer" else False,
-                "buyer_otp_code": otp_code if role == "employer" else None,
-                "seller_otp_code": otp_code if role == "freelancer" else None,
-                "buyer_fullname": full_name if role == "employer" else None,
-                "seller_fullname": full_name if role == "freelancer" else None,
-                "buyer_national_id": national_id if role == "employer" else None,
-                "seller_national_id": national_id if role == "freelancer" else None,
-                "buyer_ip": client_ip if role == "employer" else None,
-                "seller_ip": client_ip if role == "freelancer" else None,
-                "buyer_role": "employer" if role == "employer" else None,  # ✅ نقش خریدار
-                "seller_role": "freelancer" if role == "freelancer" else None,  # ✅ نقش فروشنده
-                "status": "pending_approval"
+                "status": "pending_party_b"
             }
-            contract = db.create_contract(payload)
-            if not contract:
-                bot.send_message(chat_id, "❌ خطا در ایجاد قرارداد در دیتابیس.")
-                return
+            if role == "employer":
+                updates.update({
+                    "buyer_id": user_id,
+                    "buyer_signed_at": now,
+                    "buyer_otp_verified": True,
+                    "buyer_otp_code": otp_code,
+                    "buyer_fullname": full_name,
+                    "buyer_phone": phone,
+                    "buyer_alt_phone": phone,
+                    "buyer_national_id": national_id,
+                    "buyer_ip": client_ip,
+                    "buyer_role": "employer"
+                })
+            else:
+                updates.update({
+                    "seller_id": user_id,
+                    "seller_signed_at": now,
+                    "seller_otp_verified": True,
+                    "seller_otp_code": otp_code,
+                    "seller_fullname": full_name,
+                    "seller_phone": phone,
+                    "seller_alt_phone": phone,
+                    "seller_national_id": national_id,
+                    "seller_ip": client_ip,
+                    "seller_role": "freelancer"
+                })
+            
+            if contract:
+                db.update_contract(cid, updates)
+                contract.update(updates)
+            else:
+                payload = dict(draft) if draft else {}
+                payload.update(updates)
+                payload["creator_id"] = user_id
+                payload["created_by"] = user_id
+                contract = db.create_contract(payload)
                 
+            db.append_contract_history(
+                cid,
+                f"✍️ قرارداد توسط طرف اول (سازنده - {('کارفرما' if role == 'employer' else 'مجری')}) با کد تایید OTP امضا و نهایی گردید.",
+                actor_id=user_id
+            )
+            
+            db.clear_user_state(user_id)
+            
+            # اطلاع به طرف دوم در صورتی که شناسه او در قرارداد مشخص باشد
+            notify_other_party(
+                bot, contract or updates, user_id,
+                f"✍️ طرف اول معامله شماره `{cid}` را امضا کرد.\n"
+                "برای بررسی و امضای سند، لطفاً از بخش «📜 معاملات من» وارد شوید."
+            )
+            
             bot_username = getattr(config, 'BOT_USERNAME', 'mianji_ir_bot')
             share_link = f"https://t.me/{bot_username}?start=c_{cid}"
             is_admin = (user_id == getattr(config, 'ADMIN_ID', 0) or user_id in getattr(config, 'ADMIN_IDS', []))
@@ -3317,9 +3373,9 @@ def register_user_handlers(bot: TeleBot):
                 bot,
                 chat_id,
                 f"✨ **امضای شما با موفقیت ثبت شد** ✨\n\n"
-                f"📄 قرارداد شماره `{cid}` ایجاد گردید.\n\n"
-                f"🔗 **لینک امضا و دعوت طرف دوم:**\n`{share_link}`\n\n"
-                f"💡 این لینک را برای طرف دوم ارسال کنید تا قرارداد را بررسی و امضا کند.",
+                f"📄 قرارداد شماره `{cid}` ثبت گردید و در وضعیت **«در انتظار امضای طرف دوم»** قرار گرفت.\n\n"
+                f"🔗 **لینک دعوت و امضای طرف دوم:**\n`{share_link}`\n\n"
+                f"💡 لطفاً این لینک را برای طرف دوم ارسال کنید تا وارد ربات شده و پس از بررسی، قرارداد را امضا کند.",
                 reply_markup=kb.get_contract_created_inline(cid, share_link)
             )
             bot.send_message(
@@ -3390,7 +3446,12 @@ def register_user_handlers(bot: TeleBot):
         s_signed = bool(contract.get("seller_signed_at") or updates.get("seller_signed_at"))
         both_signed = bool(b_signed and s_signed)
         
-        updates["status"] = "awaiting_payment" if both_signed else contract.get("status", "pending_approval")
+        if both_signed:
+            updates["status"] = "awaiting_payment"
+        elif contract.get("status") == "draft":
+            updates["status"] = "pending_party_b"
+        else:
+            updates["status"] = contract.get("status", "pending_party_b")
         
         db.update_contract(cid, updates)
         contract.update(updates)
@@ -3411,6 +3472,26 @@ def register_user_handlers(bot: TeleBot):
                 f"✍️ طرف مقابل معامله شماره `{cid}` را امضا کرد.\n"
                 "برای مشاهده و تایید نهایی، از «📜 معاملات من» وارد شوید."
             )
+
+    @bot.message_handler(func=lambda msg: msg.text in ["📁 پیش‌نویس‌های من", "پیش‌نویس‌ها", "پیشنویس‌ها", "پیش نویس ها", "پیش‌نویسها", "پیشنویسها"])
+    def show_drafts_direct_command(message: Message):
+        user_id = message.from_user.id
+        contracts = db.get_user_contracts(user_id)
+        filtered = [c for c in contracts if c.get("status") == "draft"]
+        if not filtered:
+            bot.send_message(message.chat.id, "📁 شما در حال حاضر هیچ پیش‌نویس فعالی ندارید.")
+            return
+        bot.send_message(message.chat.id, "📁 **پیش‌نویس‌های معامله شما:**\n*(برای ادامه هر پیش‌نویس روی دکمه «🚀 تکمیل و امضا» کلیک کنید)*", parse_mode="Markdown")
+        for d in filtered[:5]:
+            cid = d.get("contract_id") or d.get("id")
+            title = d.get("title", "بدون عنوان")
+            amount = utils.format_currency(d.get("amount", 0))
+            text = (
+                f"📝 **پیش‌نویس: {title}**\n"
+                f"📌 شناسه: `{cid}`\n"
+                f"💰 مبلغ: {amount} تومان"
+            )
+            bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=kb.get_draft_management_keyboard(cid))
 
     @bot.message_handler(func=lambda msg: db.get_user_state(msg.from_user.id)[0] == "WAITING_SIGN_PHONE", content_types=['text', 'contact'])
     def handle_sign_phone(message: Message):

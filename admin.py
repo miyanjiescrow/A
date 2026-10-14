@@ -21,14 +21,59 @@ executor = ThreadPoolExecutor(max_workers=25)
 # admin_states دیگر به صورت محلی استفاده نمی‌شود و به db منتقل شده است.
 
 
-def is_admin(user_id: int) -> bool:
-    """بررسی ادمین بودن کاربر"""
-    return user_id == config.OWNER_ID or user_id == config.ADMIN_ID or user_id in getattr(config, 'ADMIN_IDS', [])
+def is_admin(user_id: Any) -> bool:
+    """بررسی ادمین بودن کاربر با مقایسه ایمن عددی و رشته‌ای"""
+    if not user_id:
+        return False
+    try:
+        uid_int = int(str(user_id).strip())
+    except (ValueError, TypeError):
+        return False
+
+    # بررسی مالک و ادمین ارشد
+    for target in [getattr(config, 'OWNER_ID', None), getattr(config, 'ADMIN_ID', None)]:
+        if target is not None:
+            try:
+                if uid_int == int(str(target).strip()):
+                    return True
+            except (ValueError, TypeError):
+                pass
+
+    # بررسی آرایه یا رشته ADMIN_IDS
+    raw_admin_ids = getattr(config, 'ADMIN_IDS', [])
+    if isinstance(raw_admin_ids, str):
+        admin_id_list = [x.strip() for x in raw_admin_ids.split(",") if x.strip()]
+    elif isinstance(raw_admin_ids, (list, tuple, set)):
+        admin_id_list = list(raw_admin_ids)
+    else:
+        admin_id_list = []
+
+    for item in admin_id_list:
+        try:
+            clean_item = str(item).split('#')[0].strip()
+            if clean_item and uid_int == int(clean_item):
+                return True
+        except (ValueError, TypeError):
+            continue
+
+    return False
 
 
-def is_owner(user_id: int) -> bool:
-    """بررسی مالک بودن کاربر"""
-    return user_id == config.OWNER_ID
+def is_owner(user_id: Any) -> bool:
+    """بررسی مالک بودن کاربر با مقایسه ایمن عددی و رشته‌ای"""
+    if not user_id:
+        return False
+    try:
+        uid_int = int(str(user_id).strip())
+        owner_id = getattr(config, 'OWNER_ID', None)
+        if owner_id is not None and uid_int == int(str(owner_id).strip()):
+            return True
+        admin_id = getattr(config, 'ADMIN_ID', None)
+        if admin_id is not None and uid_int == int(str(admin_id).strip()):
+            return True
+    except (ValueError, TypeError):
+        pass
+    return False
 
 
 def set_admin_state(chat_id: int, user_id: Optional[int], state: str, data: Optional[Dict[str, Any]] = None):
@@ -1825,21 +1870,57 @@ def register_admin_handlers(bot: TeleBot):
             bot.answer_callback_query(call.id, "❌ دسترسی ندارید.", show_alert=True)
             return
         bot.answer_callback_query(call.id)
+        
+        ambassadors = []
         try:
             from database import supabase
-            # واکشی اطلاعات سفیران به همراه اطلاعات پایه کاربر از طریق Join
-            res = supabase.table("ambassadors").select(
-                "telegram_id, withdrawable_balance, total_earnings, users(full_name, username)"
-            ).eq("is_active", True).order("total_earnings", desc=True).limit(20).execute()
-            ambassadors = res.data or []
+            if supabase:
+                # تلاش برای واکشی همراه با نام کاربری
+                res = None
+                try:
+                    res = supabase.table("ambassadors").select(
+                        "telegram_id, withdrawable_balance, total_earnings, users(full_name, username)"
+                    ).eq("is_active", True).order("total_earnings", desc=True).limit(25).execute()
+                except Exception:
+                    # در صورت عدم وجود Foreign Key Join در Supabase، کوئری مستقیم می‌زنیم
+                    res = supabase.table("ambassadors").select(
+                        "telegram_id, withdrawable_balance, total_earnings"
+                    ).eq("is_active", True).order("total_earnings", desc=True).limit(25).execute()
+                
+                raw_list = res.data or [] if res else []
+                for a in raw_list:
+                    uid = a.get("telegram_id")
+                    u_data = a.get("users")
+                    if isinstance(u_data, list) and len(u_data) > 0:
+                        u_data = u_data[0]
+                    if not u_data and uid:
+                        u_obj = db.get_user(int(uid))
+                        if u_obj:
+                            u_data = {"full_name": u_obj.get("full_name"), "username": u_obj.get("username")}
+                    a["users"] = u_data or {}
+                    ambassadors.append(a)
+
+            # اگر رکوردی در ambassadors نبود، کاربران با نقش ambassador را چک می‌کنیم
+            if not ambassadors and supabase:
+                try:
+                    res_users = supabase.table("users").select("id, full_name, username").eq("role", "ambassador").limit(25).execute()
+                    for u in (res_users.data or []):
+                        ambassadors.append({
+                            "telegram_id": u.get("id"),
+                            "withdrawable_balance": 0.0,
+                            "total_earnings": 0.0,
+                            "users": {"full_name": u.get("full_name"), "username": u.get("username")}
+                        })
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"خطا در دریافت سفیران: {e}")
             ambassadors = []
 
         if not ambassadors:
             markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("🏠 بازگشت", callback_data="adm:home"))
-            bot.edit_message_text("🤝 سفیری ثبت نشده است.",
+            markup.add(InlineKeyboardButton("🏠 بازگشت به پنل", callback_data="adm:home"))
+            bot.edit_message_text("🤝 در حال حاضر سفیری ثبت نشده است.",
                                   call.message.chat.id, call.message.message_id, reply_markup=markup)
             return
 
@@ -1847,15 +1928,16 @@ def register_admin_handlers(bot: TeleBot):
         for a in ambassadors:
             uid = a.get("telegram_id", "?")
             user_data = a.get("users", {}) or {}
-            name = user_data.get("full_name", "نامشخص")
+            name = user_data.get("full_name") or f"کاربر {uid}"
+            uname = f" (@{user_data['username']})" if user_data.get("username") else ""
             earned = float(a.get("total_earnings", 0) or 0)
             wallet = float(a.get("withdrawable_balance", 0) or 0)
             lines.append(
-                f"👤 {name} (`{uid}`)\n"
+                f"👤 **{name}**{uname} (`{uid}`)\n"
                 f"   💰 کیف‌پول: {utils.format_currency(wallet)} | کل درآمد: {utils.format_currency(earned)}"
             )
 
-        text = f"🤝 **سفیران فعال ({len(ambassadors)})**\n\n" + "\n\n".join(lines)
+        text = f"🤝 **سفیران همکار پلتفرم ({len(ambassadors)})**\n──────────────────\n\n" + "\n\n".join(lines)
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🏠 بازگشت به پنل", callback_data="adm:home"))
         bot.edit_message_text(text[:4000], call.message.chat.id, call.message.message_id,
