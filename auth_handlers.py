@@ -189,7 +189,7 @@ def register_auth_handlers(bot: TeleBot):
             bot.answer_callback_query(call.id)
             chat_id = call.message.chat.id
             
-            if call.data == "auth_cancel" or call.data == "profile_back":
+            if call.data == "auth_cancel":
                 db.clear_user_state(user_id)
                 try:
                     bot.delete_message(chat_id, call.message.message_id)
@@ -197,6 +197,20 @@ def register_auth_handlers(bot: TeleBot):
                     pass
                 bot.send_message(chat_id, "🔙 بازگشت به منوی اصلی.", reply_markup=ReplyKeyboardRemove())
                 show_guest_landing(bot, chat_id)
+
+            elif call.data == "profile_back":
+                # فقط state موقت را پاک می‌کنیم، session کاربر را دست نمی‌زنیم
+                db.clear_user_state(user_id)
+                try:
+                    bot.delete_message(chat_id, call.message.message_id)
+                except:
+                    pass
+                # بررسی می‌کنیم کاربر هنوز لاگین است
+                phone = db.get_current_user_phone(user_id)
+                if phone:
+                    show_main_dashboard(bot, chat_id, user_id)
+                else:
+                    show_guest_landing(bot, chat_id)
                 
             elif call.data == "auth_start_phone":
                 _, st_data = db.get_user_state(user_id)

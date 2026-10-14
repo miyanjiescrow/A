@@ -307,33 +307,43 @@ def build_contract_pdf(contract_data: dict, buyer_user: dict = None, seller_user
     }
     payer_text = payer_map.get(comm_payer, comm_payer)
     
-    # اطلاعات کاربران
-    if buyer_user is None or seller_user is None:
-        try:
-            import database as db
-            bid = contract_data.get("buyer_id")
-            sid = contract_data.get("seller_id")
-            if not buyer_user and bid: buyer_user = db.get_user(bid)
-            if not seller_user and sid: seller_user = db.get_user(sid)
-        except Exception as e:
-            logger.error(f"Error fetching users for PDF: {e}")
+    # اطلاعات کاربران — fetch دقیق بر اساس buyer_id و seller_id
+    try:
+        import database as db
+        bid = contract_data.get("buyer_id")
+        sid = contract_data.get("seller_id")
+        if buyer_user is None and bid:
+            buyer_user = db.get_user(bid)
+            logger.info(f"[PDF] Fetched buyer_user for id={bid}: {buyer_user is not None}")
+        if seller_user is None and sid:
+            seller_user = db.get_user(sid)
+            logger.info(f"[PDF] Fetched seller_user for id={sid}: {seller_user is not None}")
+    except Exception as e:
+        logger.error(f"Error fetching users for PDF: {e}")
 
     def get_party_display(role_type):
         """ترکیب اطلاعات لحظه امضا و اطلاعات جاری کاربر با لاگ دقیق جهت عیب‌یابی"""
-        alt_role = "employer" if role_type == "buyer" else "freelancer"
+        # نقش پیش‌فرض بر اساس role_type
+        default_role = "employer" if role_type == "buyer" else "freelancer"
 
-        # ۱. اطلاعات ذخیره شده در خود سند قرارداد
-        c_name = contract_data.get(f"{role_type}_fullname") or contract_data.get(f"{alt_role}_fullname")
-        c_nid = contract_data.get(f"{role_type}_national_id") or contract_data.get(f"{alt_role}_national_id")
-        c_phone = contract_data.get(f"{role_type}_phone") or contract_data.get(f"{alt_role}_phone") or contract_data.get(f"{role_type}_alt_phone") or contract_data.get(f"{alt_role}_alt_phone")
-        c_signed_at = contract_data.get(f"{role_type}_signed_at") or contract_data.get(f"{alt_role}_signed_at")
-        c_otp_verified = contract_data.get(f"{role_type}_otp_verified", False) or contract_data.get(f"{alt_role}_otp_verified", False)
-        # ✅ خواندن نقش ذخیره‌شده
-        c_role = contract_data.get(f"{role_type}_role") or alt_role
+        # ۱. اطلاعات ذخیره شده در خود سند قرارداد (بدون fallback به طرف مقابل)
+        c_name = contract_data.get(f"{role_type}_fullname")
+        c_nid = contract_data.get(f"{role_type}_national_id")
+        c_phone = (
+            contract_data.get(f"{role_type}_phone")
+            or contract_data.get(f"{role_type}_alt_phone")
+        )
+        c_signed_at = contract_data.get(f"{role_type}_signed_at")
+        c_otp_verified = bool(contract_data.get(f"{role_type}_otp_verified", False))
+        # ✅ خواندن نقش ذخیره‌شده مختص این طرف
+        c_role = contract_data.get(f"{role_type}_role") or default_role
 
         u = buyer_user if role_type == "buyer" else seller_user
 
-        logger.info(f"🔍 [PDF_USER_DEBUG] Role: {role_type}, Role Value: {c_role}, Snapshot Name: {c_name}, User Object Present: {u is not None}")
+        logger.info(
+            f"🔍 [PDF_USER_DEBUG] Role: {role_type}, Role Value: {c_role}, "
+            f"Snapshot Name: {c_name}, User Object Present: {u is not None}"
+        )
 
         # ۲. در صورت خالی بودن، استخراج از پروفایل کاربر
         if not c_name and u:
@@ -343,20 +353,50 @@ def build_contract_pdf(contract_data: dict, buyer_user: dict = None, seller_user
                 c_name = u.get("full_name") or u.get("first_name")
             logger.info(f"   -> Using name from profile: {c_name}")
 
-        if not c_nid and u: c_nid = u.get("national_id")
-        if not c_phone and u: c_phone = u.get("phone_number")
+        if not c_nid and u:
+            c_nid = u.get("national_id")
+        if not c_phone and u:
+            c_phone = u.get("phone_number")
 
-        # ۳. در صورت خالی بودن، بررسی تایم‌لاین تاریخچه (history)
+        # ۳. در صورت هنوز خالی بودن، بررسی تاریخچه (history)
         if (not c_name or not c_nid or not c_phone) and contract_data.get("history"):
             uid_val = contract_data.get(f"{role_type}_id") or (u.get("id") if u else None)
             for h in contract_data.get("history", []):
-                if isinstance(h, dict) and (h.get("actor") == uid_val or h.get("role") == role_type):
+                if isinstance(h, dict) and (
+                    h.get("actor") == uid_val or h.get("role") == role_type
+                ):
                     c_name = c_name or h.get("full_name")
                     c_nid = c_nid or h.get("national_id")
                     c_phone = c_phone or h.get("phone")
 
+        # ۴. در صورت هنوز خالی بودن، fetch مستقیم از دیتابیس بر اساس role_type_id
+        if not c_name or not c_phone:
+            uid_key = f"{role_type}_id"
+            db_uid = contract_data.get(uid_key)
+            if db_uid and u is None:
+                try:
+                    import database as db_mod
+                    fetched_u = db_mod.get_user(db_uid)
+                    if fetched_u:
+                        if not c_name:
+                            if fetched_u.get("first_name_real") and fetched_u.get("last_name_real"):
+                                c_name = f"{fetched_u['first_name_real']} {fetched_u['last_name_real']}"
+                            else:
+                                c_name = fetched_u.get("full_name") or fetched_u.get("first_name")
+                        if not c_nid:
+                            c_nid = fetched_u.get("national_id")
+                        if not c_phone:
+                            c_phone = fetched_u.get("phone_number")
+                        logger.info(f"   -> Fetched user from DB for {role_type}: {c_name}")
+                except Exception as fetch_err:
+                    logger.error(f"Error fetching user from DB for {role_type}: {fetch_err}")
+
         uid = str(contract_data.get(f"{role_type}_id") or (u.get("id") if u else "---"))
-        c_ip = contract_data.get(f"{role_type}_ip") or (u.get("registration_ip") if u else None) or "127.0.0.1"
+        c_ip = (
+            contract_data.get(f"{role_type}_ip")
+            or (u.get("registration_ip") if u else None)
+            or "127.0.0.1"
+        )
 
         if c_signed_at or c_otp_verified:
             status_text = "امضا شده (تایید OTP) ✅"
@@ -374,7 +414,7 @@ def build_contract_pdf(contract_data: dict, buyer_user: dict = None, seller_user
             "signed_at": c_signed_at,
             "status_text": status_text,
             "signed_jalali": signed_jalali,
-            "role": c_role  # ✅ نقش برای استفاده در PDF
+            "role": c_role,  # ✅ نقش مختص این طرف
         }
 
     buyer_info = get_party_display("buyer")
