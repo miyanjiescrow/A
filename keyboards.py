@@ -715,16 +715,22 @@ def get_ambassador_dashboard_inline(stats: dict) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(row_width=2)
     
     # ردیف اول: آمار (فقط نمایش، دکمه‌های غیرعملیاتی یا نمایشی)
-    total_refs = stats.get("total_referrals", 0)
-    balance = stats.get("withdrawable_balance", 0)
-    tier = stats.get("tier_level", "Bronze")
+    try:
+        total_refs = int(float(str(stats.get("total_referrals") or 0)))
+    except (ValueError, TypeError):
+        total_refs = 0
+    try:
+        balance = int(float(str(stats.get("withdrawable_balance") or 0)))
+    except (ValueError, TypeError):
+        balance = 0
+    tier = str(stats.get("tier_level") or "Bronze")
     
     markup.add(
         InlineKeyboardButton(f"👥 زیرمجموعه: {total_refs} نفر", callback_data="amb_stats_refs"),
         InlineKeyboardButton(f"🏆 سطح: {tier}", callback_data="amb_stats_tier")
     )
     markup.add(
-        InlineKeyboardButton(f"💰 موجودی: {int(balance):,} ت", callback_data="amb_stats_bal")
+        InlineKeyboardButton(f"💰 موجودی: {balance:,} ت", callback_data="amb_stats_bal")
     )
     
     # ردیف دوم: عملیات اصلی

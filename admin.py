@@ -103,8 +103,9 @@ def register_admin_handlers(bot: TeleBot):
     # ====================================================
     # ۰. دستور ادمین و بازگشت به پنل مدیریت (adm:home)
     # ====================================================
-    @bot.message_handler(commands=['admin'])
-    @bot.channel_post_handler(commands=['admin'])
+    @bot.message_handler(commands=['admin', 'panel'])
+    @bot.channel_post_handler(commands=['admin', 'panel'])
+    @bot.message_handler(func=lambda msg: msg.text in ["⚡ پنل مدیریت هوشمند", "پنل مدیریت هوشمند", "پنل مدیریت", "پنل ادمین"])
     def admin_command(message: Message):
         user_id = message.from_user.id if message.from_user else message.chat.id
         if not is_admin(user_id):

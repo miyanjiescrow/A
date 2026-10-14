@@ -35,8 +35,8 @@ def validate_iranian_sheba(sheba: str) -> bool:
     )
     return int(numeric_str) % 97 == 1
 
-# قفل Thread جهت جلوگیری از Race Condition (فقط برای تغییرات حساس حافظه)
-db_lock = threading.Lock()
+# قفل Reentrant Thread جهت جلوگیری از Race Condition و Deadlock
+db_lock = threading.RLock()
 
 # Thread pool for non-blocking DB operations (like persisting state)
 db_executor = threading.Thread(target=lambda: None) # placeholder to keep imports clean if needed
@@ -146,10 +146,12 @@ def get_user_state(user_id: int) -> tuple:
 
 
 def clear_user_state(user_id: int) -> None:
-    """پاک‌سازی وضعیت کاربر (به صورت غیرهمزمان در دیتابیس)"""
+    """پاک‌سازی وضعیت کاربر (به صورت غیرهمزمان در دیتابیس و ریست آنی در کش)"""
     with db_lock:
-        if user_id in _user_states:
-            del _user_states[user_id]
+        _user_states[user_id] = {
+            "current_state": "START",
+            "state_data": {}
+        }
     
     if supabase:
         def _delete():
@@ -373,11 +375,11 @@ def get_ambassador(user_id: int) -> Optional[Dict[str, Any]]:
         res = supabase.table("ambassadors").select("*").eq("telegram_id", user_id).execute()
         if res.data and len(res.data) > 0:
             amb = res.data[0]
-            amb.setdefault("total_referrals", get_ambassador_referrals_count(user_id))
-            amb.setdefault("commission_rate", float(getattr(config, "AFFILIATE_SHARE_PERCENT", 30.0)))
-            amb.setdefault("tier_level", "Bronze")
-            amb.setdefault("total_earnings", 0.0)
-            amb.setdefault("withdrawable_balance", 0.0)
+            amb["total_referrals"] = int(amb.get("total_referrals") or get_ambassador_referrals_count(user_id) or 0)
+            amb["commission_rate"] = float(amb.get("commission_rate") or getattr(config, "AFFILIATE_SHARE_PERCENT", 30.0))
+            amb["tier_level"] = str(amb.get("tier_level") or "Bronze")
+            amb["total_earnings"] = float(amb.get("total_earnings") or 0.0)
+            amb["withdrawable_balance"] = float(amb.get("withdrawable_balance") or 0.0)
             return amb
         
         # اگر در جدول ambassadors نبود، بررسی نقش کاربر
@@ -1060,7 +1062,13 @@ def _enrich_contract(c: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     # ۳. تعیین هویت طرف اول (سازنده معامله) و طرف دوم
     if cid_val:
         try:
-            c["creator_user"] = get_user(int(cid_val))
+            cid_int = int(cid_val)
+            if bid and cid_int == int(bid):
+                c["creator_user"] = buyer_user
+            elif sid and cid_int == int(sid):
+                c["creator_user"] = seller_user
+            else:
+                c["creator_user"] = get_user(cid_int)
         except Exception:
             pass
         

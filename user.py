@@ -22,6 +22,56 @@ executor = ThreadPoolExecutor(max_workers=20)
 
 CONTRACT_ID_PATTERN = re.compile(r"^[A-Za-z]{2,5}-\d{3,4}-\d{3,4}$")
 
+def is_admin_user(user_id) -> bool:
+    """بررسی ادمین بودن کاربر با مقایسه ایمن عددی و رشته‌ای"""
+    if not user_id:
+        return False
+    try:
+        from admin import is_admin
+        return is_admin(user_id)
+    except Exception:
+        pass
+    try:
+        uid_int = int(str(user_id).strip())
+        for target in [getattr(config, 'OWNER_ID', None), getattr(config, 'ADMIN_ID', None)]:
+            if target is not None and uid_int == int(str(target).strip()):
+                return True
+        raw_admin_ids = getattr(config, 'ADMIN_IDS', [])
+        if isinstance(raw_admin_ids, str):
+            admin_id_list = [x.strip() for x in raw_admin_ids.split(",") if x.strip()]
+        elif isinstance(raw_admin_ids, (list, tuple, set)):
+            admin_id_list = list(raw_admin_ids)
+        else:
+            admin_id_list = []
+        for item in admin_id_list:
+            clean_item = str(item).split('#')[0].strip()
+            if clean_item and uid_int == int(clean_item):
+                return True
+    except Exception:
+        pass
+    return False
+
+def is_owner_user(user_id) -> bool:
+    """بررسی مالک بودن کاربر با مقایسه ایمن عددی و رشته‌ای"""
+    if not user_id:
+        return False
+    try:
+        from admin import is_owner
+        return is_owner(user_id)
+    except Exception:
+        pass
+    try:
+        uid_int = int(str(user_id).strip())
+        owner_id = getattr(config, 'OWNER_ID', None)
+        if owner_id is not None and uid_int == int(str(owner_id).strip()):
+            return True
+        admin_id = getattr(config, 'ADMIN_ID', None)
+        if admin_id is not None and uid_int == int(str(admin_id).strip()):
+            return True
+    except Exception:
+        pass
+    return False
+
 
 # ====================================================
 # توابع کمکی سراسری (اطلاع‌رسانی طرف مقابل + ارسال خودکار PDF)
@@ -233,9 +283,10 @@ def build_draft_preview_text(state_data: dict) -> str:
 
 def _get_main_menu_for_user(user_id: int, is_admin: bool = False):
     """کمک‌کار برای دریافت منوی اصلی با وضعیت احراز هویت کاربر"""
+    admin_flag = is_admin or is_admin_user(user_id)
     user_info = db.get_user(user_id)
     is_verified = user_info.get("is_verified", False) if user_info else False
-    return kb.get_main_menu(is_admin, is_verified)
+    return kb.get_main_menu(admin_flag, is_verified)
 
 
 def _get_contract_category_logic(status: str) -> str:
@@ -1586,42 +1637,36 @@ def register_user_handlers(bot: TeleBot):
         except Exception as db_err:
             logger.error(f"🚨 [SUPABASE_CRITICAL_ERROR] db.create_contract Exception for user {user_id}: {db_err}", exc_info=True)
 
-        is_admin = (user_id == getattr(config, 'ADMIN_ID', 0) or user_id in getattr(config, 'ADMIN_IDS', []))
+        is_admin = is_admin_user(user_id)
 
         if not db_success:
             logger.error(f"❌ [CONTRACT_SAVE_FAIL] create_contract returned None or failed for user {user_id}")
-            # طبق درخواست کاربر، خطای دیتابیس نمایش داده نمی‌شود و فقط لاگ می‌شود.
-            # با این حال منوی اصلی را برمی‌گردانیم تا کاربر سرگردان نشود.
             bot.send_message(
                 message.chat.id, 
                 "✅ فرآیند با موفقیت انجام شد. می‌توانید از منوی زیر استفاده کنید.", 
-                reply_markup=kb.get_main_menu(is_admin)
+                reply_markup=_get_main_menu_for_user(user_id, is_admin)
             )
             return
 
-        # ۵. بخش اطلاع‌رسانی و عملیات جانبی (جدا شده از بلاک دیتابیس)
+        # ۵. بخش اطلاع‌رسانی و عملیات جانبی (به‌صورت غیرمسدودکننده)
+        contract_id = payload.get("contract_id")
+        cid = (contract.get("contract_id") if contract else None) or contract_id
+        db.clear_user_state(user_id)
+
         try:
-            contract_id = payload.get("contract_id")
-            db.append_contract_history(
+            executor.submit(
+                db.append_contract_history,
                 contract_id,
                 f"🆕 معامله توسط {('کارفرما' if role=='employer' else 'مجری')} ایجاد و با OTP تایید شد.",
-                actor_id=user_id
+                user_id
             )
-
-            db.clear_user_state(user_id)
-            cid = contract.get("contract_id") or contract_id
         except Exception as e:
             logger.error(f"Error in post-creation history: {e}")
 
-        try:
-            me = bot.get_me()
-            bot_username = me.username if me and me.username else getattr(config, 'BOT_USERNAME', 'mianji_ir_bot')
-        except:
-            bot_username = getattr(config, 'BOT_USERNAME', 'mianji_ir_bot')
-        
+        bot_username = getattr(config, 'BOT_USERNAME', 'mianji_ir_bot')
         invite_text = utils.format_invitation_message(cid, bot_username)
-        amount = utils.safe_float(contract.get("amount", 0))
-        payer = contract.get("commission_payer", "freelancer")
+        amount = utils.safe_float(contract.get("amount", 0) if contract else payload.get("amount", 0))
+        payer = (contract.get("commission_payer") if contract else None) or payload.get("commission_payer", "freelancer")
         comm, net, employer_pays = utils.calculate_commission(amount, payer=payer)
         share_link = f"https://t.me/{bot_username}?start=c_{cid}"
         
@@ -1645,7 +1690,7 @@ def register_user_handlers(bot: TeleBot):
         bot.send_message(
             message.chat.id,
             "🏠 از منوی زیر می‌توانید بخش‌های دیگر را مدیریت کنید:",
-            reply_markup=kb.get_main_menu(is_admin)
+            reply_markup=_get_main_menu_for_user(user_id, is_admin)
         )
         
     # ====================================================
@@ -3294,6 +3339,8 @@ def register_user_handlers(bot: TeleBot):
         cid = data.get("contract_id")
         draft = data.get("contract_draft")
         client_ip = data.get("client_ip", "127.0.0.1")
+
+        contract = db.get_contract(cid) if cid else None
 
         # الف) اگر سازنده معامله (طرف اول) است و قرارداد در حالت پیش‌نویس است
         is_creator_signing_draft = False
@@ -6258,7 +6305,7 @@ def register_user_handlers(bot: TeleBot):
     # ====================================================
     # ۱۳.۸ پنل سفیران (B2B Affiliate System)
     # ====================================================
-    @bot.message_handler(func=lambda msg: msg.text == "💎 پنل سفیران")
+    @bot.message_handler(func=lambda msg: msg.text in ["💎 پنل سفیران", "پنل سفیران", "سفیران", "/ambassador", "/affiliate", "همکاری"])
     def handle_ambassador_panel(message: Message):
         user_id = message.from_user.id
         _show_ambassador_panel(message.chat.id, user_id)
@@ -6300,20 +6347,23 @@ def register_user_handlers(bot: TeleBot):
             user_row["role"] = "ambassador"
 
         # نمایش داشبورد
-        amb_stats = db.get_ambassador(user_id)
-        if not amb_stats:
-            bot.send_message(chat_id, "❌ خطایی در دریافت اطلاعات سفیر رخ داد.")
-            return
+        amb_stats = db.get_ambassador(user_id) or {}
+        user_name = user_row.get('full_name') or user_row.get('first_name') or f"کاربر {user_id}"
+        tier = amb_stats.get('tier_level', 'Bronze')
+        rate = amb_stats.get('commission_rate', 30)
+        refs = amb_stats.get('total_referrals', 0)
+        earnings = float(amb_stats.get('total_earnings') or 0.0)
+        balance = float(amb_stats.get('withdrawable_balance') or 0.0)
 
         dashboard = (
             f"🚀 **پنل سفیران میانجی**\n"
             f"──────────────────\n"
-            f"👤 `{user_row.get('full_name', 'کاربر')}` | 🎖 `{amb_stats.get('tier_level', 'Bronze')}`\n"
-            f"💹 **سهم شما:** `{amb_stats.get('commission_rate', 30)}%` از درآمد پلتفرم\n"
+            f"👤 `{user_name}` | 🎖 `{tier}`\n"
+            f"💹 **سهم شما:** `{rate}%` از درآمد پلتفرم\n"
             f"──────────────────\n"
-            f"👥 **ورودی:** `{amb_stats.get('total_referrals', 0)}` نفر\n"
-            f"💰 **سود کل:** `{utils.format_currency(float(amb_stats.get('total_earnings', 0)))}` \n"
-            f"💳 **موجودی:** `{utils.format_currency(float(amb_stats.get('withdrawable_balance', 0)))}` \n"
+            f"👥 **ورودی:** `{refs}` نفر\n"
+            f"💰 **سود کل:** `{utils.format_currency(earnings)}` \n"
+            f"💳 **موجودی:** `{utils.format_currency(balance)}` \n"
             f"──────────────────\n"
             "💡 لینک خود را منتشر کنید؛ آن‌ها **تخفیف** می‌گیرند و شما **سود** می‌برید."
         )
@@ -7430,22 +7480,25 @@ def register_user_handlers(bot: TeleBot):
         )
 
     # ====================================================
-    @bot.message_handler(func=lambda msg: msg.text == "⚡ پنل مدیریت هوشمند")
+    @bot.message_handler(func=lambda msg: msg.text in ["⚡ پنل مدیریت هوشمند", "پنل مدیریت هوشمند", "پنل مدیریت", "پنل ادمین", "/admin", "مدیریت"])
     def show_admin_panel(message: Message):
         """نمایش پنل مدیریت برای ادمین‌ها"""
         user_id = message.from_user.id
         
-        # بررسی ادمین یا مالک بودن
-        is_admin_u = (user_id == getattr(config, 'ADMIN_ID', 0) or user_id in getattr(config, 'ADMIN_IDS', []))
-        is_owner_u = (user_id == getattr(config, 'OWNER_ID', 0))
+        # بررسی ادمین یا مالک بودن با مقایسه ایمن
+        is_admin_u = is_admin_user(user_id)
+        is_owner_u = is_owner_user(user_id)
         
         if not (is_admin_u or is_owner_u):
             bot.send_message(message.chat.id, "❌ شما دسترسی به این بخش ندارید.")
             return
         
         # دریافت آمار سریع
-        pending_withdrawals = len(db.get_pending_withdrawal_requests())
-        quick_stats = {"withdrawals": pending_withdrawals}
+        try:
+            quick_stats = db.get_admin_quick_stats()
+        except Exception:
+            pending_withdrawals = len(db.get_pending_withdrawal_requests())
+            quick_stats = {"withdrawals": pending_withdrawals}
         
         bot.send_message(
             message.chat.id,
