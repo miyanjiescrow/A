@@ -163,11 +163,25 @@ def clear_user_state(user_id: int) -> None:
 
 
 def get_user_draft(user_id: int) -> Optional[Dict[str, Any]]:
-    """دریافت پیش‌نویس معامله کاربر"""
+    """دریافت پیش‌نویس معامله جاری یا آخرین پیش‌نویس کاربر"""
     _, data = get_user_state(user_id)
-    if isinstance(data, dict):
+    if isinstance(data, dict) and data.get("contract_draft"):
         return data.get("contract_draft")
+    user_id_str = str(user_id).strip()
+    with db_lock:
+        for cid, c in _in_memory_contracts.items():
+            if c.get("status") == "draft":
+                creator = str(c.get("creator_id") or c.get("created_by") or "").strip()
+                buyer = str(c.get("buyer_id") or "").strip()
+                seller = str(c.get("seller_id") or "").strip()
+                if user_id_str in (creator, buyer, seller):
+                    return c
     return None
+
+def get_user_drafts(user_id: int) -> List[Dict[str, Any]]:
+    """دریافت تمام پیش‌نویس‌های کاربر به ترتیب جدیدترین"""
+    contracts = get_user_contracts(user_id)
+    return [c for c in contracts if c.get("status") == "draft"]
 
 
 

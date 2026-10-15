@@ -51,9 +51,40 @@ COLORS = {
 # ====================================================
 # مسیر فونت را به صورت مطلق و دقیق تنظیم می‌کنیم
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_DIR = os.path.join(BASE_DIR, "fonts")
+
+# بررسی تمام مسیرهای احتمالی برای پوشه فونت
+possible_font_dirs = [
+    os.path.join(BASE_DIR, "Font"),
+    os.path.join(BASE_DIR, "fonts"),
+    "/Font",
+    "/fonts",
+    os.path.join(os.getcwd(), "Font"),
+    os.path.join(os.getcwd(), "fonts")
+]
+
+FONT_DIR = os.path.join(BASE_DIR, "Font")
+for p in possible_font_dirs:
+    if os.path.exists(p) and os.path.isdir(p):
+        FONT_DIR = p
+        break
+
 Vazir_Regular = os.path.join(FONT_DIR, "Vazirmatn-Regular.ttf")
 Vazir_Bold = os.path.join(FONT_DIR, "Vazirmatn-Bold.ttf")
+
+# اگر فونت در مسیر بالا نبود، در تمام پوشه‌ها بگرد
+if not os.path.exists(Vazir_Regular):
+    for p in possible_font_dirs:
+        candidate = os.path.join(p, "Vazirmatn-Regular.ttf")
+        if os.path.exists(candidate):
+            Vazir_Regular = candidate
+            break
+
+if not os.path.exists(Vazir_Bold):
+    for p in possible_font_dirs:
+        candidate = os.path.join(p, "Vazirmatn-Bold.ttf")
+        if os.path.exists(candidate):
+            Vazir_Bold = candidate
+            break
 
 # فونت‌های سیستمی به عنوان فال‌بک نهایی
 PERSIAN_FONT = "Helvetica"
@@ -65,25 +96,27 @@ def download_font_if_missing(file_path: str, url: str):
     """دانلود فونت در صورت عدم وجود در مسیر مشخص شده"""
     if not os.path.exists(file_path):
         try:
-            logger.info(f"Font {os.path.basename(file_path)} missing. Downloading...")
+            logger.info(f"Font {os.path.basename(file_path)} missing. Attempting download...")
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            response = httpx.get(url, follow_redirects=True)
+            response = httpx.get(url, follow_redirects=True, timeout=10.0)
             if response.status_code == 200:
                 with open(file_path, "wb") as f:
                     f.write(response.content)
                 logger.info(f"Font downloaded successfully: {file_path}")
             else:
-                logger.error(f"Failed to download font. Status: {response.status_code}")
+                logger.warning(f"Failed to download font. Status: {response.status_code}")
         except Exception as e:
-            logger.error(f"Error downloading font: {e}")
+            logger.warning(f"Notice downloading font: {e}")
 
 # لینک‌های مستقیم فونت وزیر
 VAZIR_REG_URL = "https://github.com/rastikerdar/vazirmatn/raw/v33.003/fonts/ttf/Vazirmatn-Regular.ttf"
 VAZIR_BOLD_URL = "https://github.com/rastikerdar/vazirmatn/raw/v33.003/fonts/ttf/Vazirmatn-Bold.ttf"
 
-# تلاش برای دانلود فونت‌ها در هنگام شروع ماژول
-download_font_if_missing(Vazir_Regular, VAZIR_REG_URL)
-download_font_if_missing(Vazir_Bold, VAZIR_BOLD_URL)
+# تلاش برای دانلود فونت‌ها در هنگام شروع ماژول تنها در صورت نبودن
+if not os.path.exists(Vazir_Regular):
+    download_font_if_missing(Vazir_Regular, VAZIR_REG_URL)
+if not os.path.exists(Vazir_Bold):
+    download_font_if_missing(Vazir_Bold, VAZIR_BOLD_URL)
 
 def register_fonts():
     global PERSIAN_FONT, PERSIAN_FONT_BOLD
@@ -92,21 +125,41 @@ def register_fonts():
         if os.path.exists(Vazir_Regular):
             pdfmetrics.registerFont(TTFont("Vazir", Vazir_Regular))
             PERSIAN_FONT = "Vazir"
-            logger.info("Vazir Regular font registered successfully.")
+            logger.info(f"Vazir Regular font registered successfully from {Vazir_Regular}.")
         else:
-            logger.warning("Vazir Regular font file not found. Using Helvetica as fallback.")
+            # جستجوی هر ttf دیگر
+            ttf_fallbacks = [
+                os.path.join(FONT_DIR, "Helvetica.ttf"),
+                "/Font/Helvetica.ttf",
+                "/Font/Vazirmatn-Regular.ttf"
+            ]
+            registered = False
+            for tf in ttf_fallbacks:
+                if os.path.exists(tf):
+                    try:
+                        pdfmetrics.registerFont(TTFont("Vazir", tf))
+                        PERSIAN_FONT = "Vazir"
+                        registered = True
+                        break
+                    except Exception:
+                        pass
+            if not registered:
+                PERSIAN_FONT = "Helvetica"
+                logger.warning("No TTF font found. Using Helvetica.")
             
-        # ثبت فونت Bold
+        # ثبت فونت Bold (در صورت نبودن فونت بولد، از رگولار استفاده می‌کنیم تا یونیکد آسیب نبیند)
         if os.path.exists(Vazir_Bold):
             pdfmetrics.registerFont(TTFont("Vazir-Bold", Vazir_Bold))
             PERSIAN_FONT_BOLD = "Vazir-Bold"
             logger.info("Vazir Bold font registered successfully.")
         else:
-            PERSIAN_FONT_BOLD = PERSIAN_FONT
+            if PERSIAN_FONT == "Vazir":
+                pdfmetrics.registerFont(TTFont("Vazir-Bold", Vazir_Regular))
+                PERSIAN_FONT_BOLD = "Vazir-Bold"
+            else:
+                PERSIAN_FONT_BOLD = PERSIAN_FONT
     except Exception as e:
         logger.error(f"Error registering fonts: {e}")
-        print("FONT REGISTRATION ERROR:", traceback.format_exc())
-        # بازگشت به فونت‌های پیش‌فرض در صورت خطا
         PERSIAN_FONT = "Helvetica"
         PERSIAN_FONT_BOLD = "Helvetica-Bold"
 

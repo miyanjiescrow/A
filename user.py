@@ -414,14 +414,17 @@ def register_user_handlers(bot: TeleBot):
         state_tuple = db.get_user_state(user_id)
         state_data = state_tuple[1] if isinstance(state_tuple, tuple) and len(state_tuple) > 1 else {}
         draft = state_data.get("contract_draft") if isinstance(state_data, dict) else None
-        if draft and isinstance(draft, dict) and draft.get("title"):
-            db.save_user_draft(user_id, draft)
+        cid = state_data.get("contract_id") if isinstance(state_data, dict) else None
+        if draft and isinstance(draft, dict):
+            if not draft.get("title"):
+                draft["title"] = "پیش‌نویس در حال تنظیم"
+            db.save_user_draft(user_id, draft, contract_id=cid)
 
         db.clear_user_state(user_id)
-        is_admin = (user_id == getattr(config, 'ADMIN_ID', 0) or user_id in getattr(config, 'ADMIN_IDS', []))
+        is_admin = is_admin_user(user_id)
         bot.send_message(
             message.chat.id,
-            "❌ عملیات لغو شد. پیش‌نویس شما ذخیره گردید و به منوی اصلی بازگشتید.",
+            "❌ عملیات ذخیره شد. پیش‌نویس شما در بخش «معاملات من > پیش‌نویس‌های من» در دسترس است و به منوی اصلی بازگشتید.",
             reply_markup=_get_main_menu_for_user(user_id, is_admin)
         )
 
@@ -1958,19 +1961,34 @@ def register_user_handlers(bot: TeleBot):
         contracts = db.get_user_contracts(user_id)
         if category == "drafts":
             filtered = [c for c in contracts if c.get("status") == "draft"]
-        else:
-            filtered = [c for c in contracts if _get_contract_category_logic(c.get("status")) == category and c.get("status") != "draft"]
-        
-        if not filtered:
-            bot.answer_callback_query(call.id, "⚠️ معامله‌ای در این دسته یافت نشد.", show_alert=True)
-            return
-            
-        bot.answer_callback_query(call.id)
-        
-        if category == "drafts":
-            bot.send_message(call.message.chat.id, "📁 **۳ پیش‌نویس آخر شما:**\n*(جدیدترین پیش‌نویس نزدیک‌ترین پیام به کیبورد است)*")
-            latest_3_drafts = filtered[:3][::-1]
-            for d in latest_3_drafts:
+            if not filtered:
+                bot.answer_callback_query(call.id)
+                empty_markup = InlineKeyboardMarkup(row_width=1)
+                empty_markup.add(
+                    InlineKeyboardButton("➕ ایجاد پیش‌نویس جدید", callback_data="create_new_draft"),
+                    InlineKeyboardButton("🔙 بازگشت به منوی معاملات", callback_data="back_to_contracts_menu")
+                )
+                try:
+                    bot.edit_message_text(
+                        "📁 **پیش‌نویس‌های من**\n\nشما در حال حاضر هیچ پیش‌نویس فعالی ندارید.\nجهت ثبت و ذخیره یک پیش‌نویس جدید روی دکمه زیر کلیک کنید:",
+                        call.message.chat.id,
+                        call.message.message_id,
+                        parse_mode="Markdown",
+                        reply_markup=empty_markup
+                    )
+                except Exception:
+                    bot.send_message(
+                        call.message.chat.id,
+                        "📁 **پیش‌نویس‌های من**\n\nشما در حال حاضر هیچ پیش‌نویس فعالی ندارید.\nجهت ثبت و ذخیره یک پیش‌نویس جدید روی دکمه زیر کلیک کنید:",
+                        parse_mode="Markdown",
+                        reply_markup=empty_markup
+                    )
+                return
+
+            bot.answer_callback_query(call.id)
+            bot.send_message(call.message.chat.id, "📁 **پیش‌نویس‌های معامله شما:**\n*(جدیدترین پیش‌نویس‌ها در زیر نمایش داده شده‌اند)*")
+            latest_drafts = filtered[:5][::-1]
+            for d in latest_drafts:
                 cid = d.get("contract_id") or d.get("id")
                 title = d.get("title", "بدون عنوان")
                 amount = utils.format_currency(d.get("amount", 0))
@@ -1980,7 +1998,23 @@ def register_user_handlers(bot: TeleBot):
                     f"💰 مبلغ: {amount} تومان"
                 )
                 bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb.get_draft_management_keyboard(cid))
+            
+            # ارسال دکمه ایجاد پیش‌نویس جدید در انتهای لیست پیش‌نویس‌ها
+            add_more_markup = InlineKeyboardMarkup()
+            add_more_markup.add(
+                InlineKeyboardButton("➕ ایجاد پیش‌نویس جدید دیگر", callback_data="create_new_draft"),
+                InlineKeyboardButton("🔙 بازگشت به معاملات من", callback_data="back_to_contracts_menu")
+            )
+            bot.send_message(call.message.chat.id, "➕ جهت ساخت پیش‌نویس جدید می‌توانید از دکمه زیر استفاده کنید:", reply_markup=add_more_markup)
             return
+
+        filtered = [c for c in contracts if _get_contract_category_logic(c.get("status")) == category and c.get("status") != "draft"]
+        
+        if not filtered:
+            bot.answer_callback_query(call.id, "⚠️ معامله‌ای در این دسته یافت نشد.", show_alert=True)
+            return
+            
+        bot.answer_callback_query(call.id)
 
         cat_labels = {
             "active": "🟢 در حال انجام",
@@ -2053,6 +2087,66 @@ def register_user_handlers(bot: TeleBot):
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
+
+    @bot.callback_query_handler(func=lambda call: call.data in ["create_new_draft", "new_draft"])
+    def handle_create_new_draft(call: CallbackQuery):
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
+        if str(db.get_setting("maintenance_mode", "0")) == "1":
+            bot.send_message(
+                call.message.chat.id,
+                "🛠 **سیستم در حال به‌روزرسانی است.**\n\nامکان ثبت معامله جدید موقتاً در دسترس نیست.",
+                parse_mode="Markdown"
+            )
+            return
+        db.set_user_state(user_id, "WAITING_ROLE_SELECTION", {})
+        bot.send_message(
+            call.message.chat.id,
+            "💼 **ایجاد پیش‌نویس قرارداد جدید**\n\n👤 لطفاً نقش خود را در این معامله مشخص کنید:",
+            reply_markup=kb.get_role_keyboard()
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data == "save_draft_exit")
+    def handle_save_draft_exit(call: CallbackQuery):
+        user_id = call.from_user.id
+        state_tuple = db.get_user_state(user_id)
+        state_data = state_tuple[1] if isinstance(state_tuple, tuple) and len(state_tuple) > 1 else {}
+        draft = state_data.get("contract_draft") if isinstance(state_data, dict) else {}
+        cid = state_data.get("contract_id") or draft.get("contract_id")
+        
+        saved_rec = db.save_user_draft(user_id, draft, contract_id=cid)
+        db.clear_user_state(user_id)
+        bot.answer_callback_query(call.id, "✅ پیش‌نویس با موفقیت ذخیره شد.", show_alert=True)
+        is_admin = is_admin_user(user_id)
+        saved_cid = cid or (saved_rec and saved_rec.get("contract_id")) or "ثبت‌شده"
+        bot.send_message(
+            call.message.chat.id,
+            f"📁 **پیش‌نویس شما با شناسه `{saved_cid}` با موفقیت ذخیره گردید.**\n\n"
+            "می‌توانید هر زمان از بخش **«معاملات من > پیش‌نویس‌های من»** اقدام به ویرایش، تکمیل و امضای آن نمایید.",
+            parse_mode="Markdown",
+            reply_markup=_get_main_menu_for_user(user_id, is_admin)
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data in ["back_to_contracts_menu", "my_contracts"])
+    def handle_back_to_contracts_menu(call: CallbackQuery):
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
+        contracts = db.get_user_contracts(user_id)
+        stats = _get_contracts_stats(contracts)
+        text = (
+            "📑 **پنل مدیریت هوشمند معاملات شما**\n"
+            "──────────────────\n"
+            "برای مشاهده لیست، پیگیری وضعیت، پیش‌نویس‌ها و مدیریت قراردادها، لطفاً از دکمه‌های شیشه‌ای زیر استفاده کنید:\n\n"
+            f"📊 **آمار کلی:**\n"
+            f"• درحال انجام: `{stats.get('active', 0)}`\n"
+            f"• در انتظار اقدام: `{stats.get('pending', 0)}`\n"
+            f"• پیش‌نویس‌ها: `{stats.get('drafts', 0)}`\n"
+            f"• تکمیل شده: `{stats.get('completed', 0)}`"
+        )
+        try:
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=kb.get_contracts_categories_keyboard(stats))
+        except Exception:
+            bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb.get_contracts_categories_keyboard(stats))
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("contracts_more:"))
     def handle_contracts_more(call: CallbackQuery):
