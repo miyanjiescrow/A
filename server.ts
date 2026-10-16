@@ -446,6 +446,59 @@ app.post('/api/contracts/:id/dispute', (req: Request, res: Response) => {
   res.json({ success: true, contract: c });
 });
 
+// Submit receipt
+app.post('/api/contracts/:id/receipt', (req: Request, res: Response) => {
+  const c = contracts.find(x => x.contract_id === req.params.id || x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: 'قرارداد یافت نشد.' });
+
+  const now = new Date().toISOString();
+  c.status = 'awaiting_receipt_approval' as any;
+  c.history.push({
+    event: `💳 کارفرما تصویر فیش واریزی را ارسال کرد و جهت بررسی و تایید در صف ادمین قرار گرفت.`,
+    timestamp: now,
+    actor: 'کارفرما'
+  });
+
+  res.json({
+    success: true,
+    contract: c,
+    message: 'فیش واریزی با موفقیت دریافت شد و برای ادمین ارسال گردید.'
+  });
+});
+
+// Admin approves receipt
+app.post('/api/contracts/:id/approve_receipt', (req: Request, res: Response) => {
+  const c = contracts.find(x => x.contract_id === req.params.id || x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: 'قرارداد یافت نشد.' });
+
+  const now = new Date().toISOString();
+  c.status = 'active';
+  c.history.push({
+    event: `✅ فیش واریزی توسط مدیریت تایید شد. مبلغ ${c.amount.toLocaleString('fa-IR')} تومان در صندوق امانی میانجی قفل گردید و پروژه فعال شد.`,
+    timestamp: now,
+    actor: 'مدیریت'
+  });
+
+  res.json({ success: true, contract: c });
+});
+
+// Admin rejects receipt
+app.post('/api/contracts/:id/reject_receipt', (req: Request, res: Response) => {
+  const c = contracts.find(x => x.contract_id === req.params.id || x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: 'قرارداد یافت نشد.' });
+
+  const { reason = 'مغایرت مبلغ یا ناخوانا بودن تصویر فیش' } = req.body || {};
+  const now = new Date().toISOString();
+  c.status = 'awaiting_payment';
+  c.history.push({
+    event: `❌ فیش واریزی توسط مدیریت رد شد (علت: ${reason}).`,
+    timestamp: now,
+    actor: 'مدیریت'
+  });
+
+  res.json({ success: true, contract: c });
+});
+
 // PDF Generation Endpoint
 app.get('/api/contracts/:id/pdf', async (req: Request, res: Response) => {
   try {
@@ -761,7 +814,8 @@ app.get('/api/contracts/:id/pdf', async (req: Request, res: Response) => {
 
     const pdfBytes = await pdfDoc.save();
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="Miyanji_Contract_${c.contract_id}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="Miyanji_Contract_${c.contract_id}.pdf"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.send(Buffer.from(pdfBytes));
   } catch (err: any) {
     console.error('Error generating PDF:', err);

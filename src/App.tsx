@@ -28,7 +28,9 @@ import {
   HelpCircle,
   ChevronRight,
   FileCheck,
-  Sparkles
+  Sparkles,
+  UploadCloud,
+  CheckCheck
 } from 'lucide-react';
 
 interface Milestone {
@@ -50,7 +52,7 @@ interface Contract {
   commission_payer: 'freelancer' | 'employer' | 'split';
   creator_id: number;
   created_by: number;
-  status: 'draft' | 'pending_party_b' | 'awaiting_payment' | 'active' | 'work_submitted' | 'completed' | 'cancelled' | 'in_dispute';
+  status: 'draft' | 'pending_party_b' | 'awaiting_payment' | 'awaiting_receipt_approval' | 'active' | 'work_submitted' | 'completed' | 'cancelled' | 'in_dispute';
   buyer_id?: number;
   buyer_fullname?: string;
   buyer_phone?: string;
@@ -88,6 +90,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
   // New Draft Modal State
@@ -116,17 +119,33 @@ export default function App() {
   const [otpInput, setOtpInput] = useState('');
   const [signStep, setSignStep] = useState<'details' | 'otp'>('details');
 
-  // Telegram Simulator State
+  // Receipt Modal State
+  const [receiptModalContract, setReceiptModalContract] = useState<Contract | null>(null);
+  const [receiptImage, setReceiptImage] = useState<string | null>(null);
+
+  // Reject Receipt Modal State
+  const [rejectModal, setRejectModal] = useState<{ cid: string; title: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState('مغایرت در مبلغ واریزی با مفاد قرارداد');
+
+  // PDF Preview Certificate Modal State
+  const [pdfPreviewModal, setPdfPreviewModal] = useState<Contract | null>(null);
+
+  // User Simulated Wallet Balance
+  const [walletBalance, setWalletBalance] = useState<number>(0);
+
+  // Simulator Context & Chat State
+  const [simulatorContext, setSimulatorContext] = useState<'idle' | 'wallet' | 'deposit' | 'contract_wizard' | 'deals'>('idle');
   const [chatMessages, setChatMessages] = useState<Array<{
     sender: 'bot' | 'user';
     text: string;
-    inlineButtons?: Array<Array<{ text: string; action: string }>>;
+    inlineButtons?: Array<Array<{ text: string; action: string; style?: 'primary' | 'danger' | 'success' }>>;
     document?: { title: string; filename: string; contractId: string };
+    photo?: string;
     timestamp: string;
   }>>([
     {
       sender: 'bot',
-      text: '👋 سلام به سامانه هوشمند میانجی (Miyanji Escrow) خوش آمدید!\nپلتفرم ثبت قراردادهای الکترونیک و واسطه‌گری امن در بستر تلگرام.\nاز منوی زیر می‌توانید معاملات و پیش‌نویس‌های خود را مدیریت کنید:',
+      text: '👋 سلام به سامانه هوشمند میانجی (Miyanji Escrow) خوش آمدید!\nپلتفرم ثبت قراردادهای الکترونیک و واسطه‌گری امن در بستر تلگرام.\nاز منوی زیر می‌توانید معاملات، پیش‌نویس‌ها و واریزها را مدیریت کنید:',
       inlineButtons: [
         [
           { text: '➕ ثبت پیش‌نویس جدید', action: 'bot_cmd_new_draft' },
@@ -154,6 +173,9 @@ export default function App() {
       setStats(resStats);
       if (resContracts.length > 0 && !selectedContract) {
         setSelectedContract(resContracts[0]);
+      } else if (selectedContract) {
+        const updated = resContracts.find((x: Contract) => x.contract_id === selectedContract.contract_id);
+        if (updated) setSelectedContract(updated);
       }
     } catch (err) {
       console.error('Error fetching data:', err);
@@ -171,12 +193,60 @@ export default function App() {
     setTimeout(() => setNotification(null), 4500);
   };
 
+  // Robust In-Iframe Blob PDF Downloader & Certificate Viewer
+  const handleDownloadPdf = async (contractId: string) => {
+    try {
+      setDownloadingId(contractId);
+      showToast('⏳ در حال آماده‌سازی و دانلود فایل PDF رسمی...');
+
+      const response = await fetch(`/api/contracts/${contractId}/pdf`);
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => null);
+        throw new Error(errJson?.error || `خطا در دریافت PDF (کد ${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Miyanji_Contract_${contractId}.pdf`;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+
+      // Delay revoking URL so browser download thread completes smoothly
+      setTimeout(() => {
+        try {
+          if (a.parentNode) a.parentNode.removeChild(a);
+          window.URL.revokeObjectURL(url);
+        } catch {
+          // ignore cleanup errors
+        }
+      }, 60000);
+
+      showToast('✅ فایل PDF صادر و بارگیری آغاز گردید.');
+
+      // Also open official PDF certificate preview modal for immediate viewing & printing
+      const c = contracts.find(x => x.contract_id === contractId);
+      if (c) {
+        setSelectedContract(c);
+        setPdfPreviewModal(c);
+      }
+    } catch (err: any) {
+      console.error('Download error:', err);
+      showToast('❌ خطا در دریافت فایل PDF: ' + (err.message || 'خطای نامشخص'));
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   // Filtered contracts
   const filteredContracts = contracts.filter(c => {
     const matchesFilter =
       filterStatus === 'all' ? true :
       filterStatus === 'draft' ? c.status === 'draft' :
-      filterStatus === 'pending' ? (c.status === 'pending_party_b' || c.status === 'awaiting_payment') :
+      filterStatus === 'pending' ? (c.status === 'pending_party_b' || c.status === 'awaiting_payment' || c.status === 'awaiting_receipt_approval') :
       filterStatus === 'active' ? (c.status === 'active' || c.status === 'work_submitted') :
       filterStatus === 'completed' ? c.status === 'completed' :
       filterStatus === 'cancelled' ? c.status === 'cancelled' :
@@ -240,7 +310,6 @@ export default function App() {
       setSelectedContract(created);
       showToast(`✅ پیش‌نویس معامله با شناسه ${created.contract_id} در سامانه ذخیره شد.`);
 
-      // Also add message to simulator
       addSimulatorMessage('bot', `📁 پیش‌نویس جدید **${created.title}** (شناسه: \`${created.contract_id}\`) ذخیره شد.\nمی‌توانید هر زمان از بخش «پیش‌نویس‌های من» آن را تکمیل و امضا کنید.`, [
         [
           { text: `🚀 تکمیل و امضا (${created.contract_id})`, action: `bot_resume_${created.contract_id}` },
@@ -276,7 +345,7 @@ export default function App() {
     setSignerNid(role === 'employer' ? (contract.buyer_national_id || '0012345678') : (contract.seller_national_id || '0087654321'));
     const genOtp = Math.floor(100000 + Math.random() * 900000).toString();
     setOtpCode(genOtp);
-    setOtpInput(genOtp); // Pre-fill for instant seamless testing
+    setOtpInput(genOtp);
     setSignStep('details');
   };
 
@@ -301,35 +370,123 @@ export default function App() {
       setSelectedContract(data.contract);
 
       if (data.pdf_ready) {
-        showToast(`🎊 هر دو طرف معامله امضا کردند! فایل سند رسمی PDF با موفقیت صادر و تحویل گردید.`);
-        // Add PDF bubble to bot simulator
-        addSimulatorMessage('bot', `🎊 **تبریک! قرارداد شماره \`${data.contract.contract_id}\` با موفقیت توسط هر دو طرف امضا شد.**\n📄 فایل PDF رسمی قرارداد امضا شده صادر شد:`, undefined, {
+        showToast(`🎊 هر دو طرف معامله امضا کردند! سند رسمی PDF صادر شد و اکنون می‌توانید فیش واریزی را ارسال کنید.`);
+        addSimulatorMessage('bot', `🎊 **تبریک! قرارداد شماره \`${data.contract.contract_id}\` با موفقیت توسط هر دو طرف امضا شد.**\n📄 فایل PDF رسمی قرارداد امضا شده صادر شد:`, [
+          [
+            { text: '📸 ارسال فیش واریزی به امانت', action: `bot_send_receipt_${data.contract.contract_id}` }
+          ]
+        ], {
           title: data.contract.title,
           filename: `Miyanji_Contract_${data.contract.contract_id}.pdf`,
           contractId: data.contract.contract_id
         });
       } else {
         showToast(`✍️ امضای ${signRole === 'employer' ? 'کارفرما' : 'مجری'} با موفقیت ثبت شد. لینک دعوت برای طرف دیگر معامله صادر گردید.`);
-        addSimulatorMessage('bot', `✍️ امضای شما برای معامله \`${data.contract.contract_id}\` ثبت گردید.\n🔗 لینک امضای طرف دوم:\n\`https://t.me/mianji_ir_bot?start=c_${data.contract.contract_id}\``);
+        addSimulatorMessage('bot', `✍️ امضای شما برای معامله \`${data.contract.contract_id}\` ثبت گردید.\n🔗 لینک دعوت طرف دوم:\n\`https://t.me/mianji_ir_bot?start=c_${data.contract.contract_id}\``);
       }
     } catch (err: any) {
       alert('خطا در ثبت امضا: ' + err.message);
     }
   };
 
-  // Escrow Actions
-  const handleEscrowDeposit = async (cid: string) => {
+  // Submit Receipt
+  const handleSubmitReceipt = async (cid: string) => {
     try {
-      const res = await fetch(`/api/contracts/${cid}/pay`, { method: 'POST' });
+      const receiptImg = receiptImage || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=400';
+      const res = await fetch(`/api/contracts/${cid}/receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receipt_image: receiptImg })
+      });
       const data = await res.json();
+      setReceiptModalContract(null);
+      setReceiptImage(null);
       await fetchData();
       setSelectedContract(data.contract);
-      showToast(`💳 مبلغ واریز و در صندوق امن میانجی قفل شد. پروژه هم‌اکنون فعال است.`);
+      showToast('✅ فیش واریزی با موفقیت دریافت و برای مدیریت ارسال گردید.');
+
+      // 1. Add user receipt message to Telegram Simulator
+      addSimulatorMessage('user', `[📷 ارسال تصویر فیش واریزی معامله ${cid}]`, undefined, undefined, receiptImg);
+
+      // 2. Bot confirmation message to user
+      addSimulatorMessage(
+        'bot',
+        `✅ **فیش واریزی معامله \`${cid}\` با موفقیت دریافت شد.**\n\n💰 **مبلغ واریزی:** ${data.contract.amount.toLocaleString('fa-IR')} تومان\n⏳ فیش جهت تطبیق حساب و تایید نهایی برای مدیریت ارسال گردید.\n💡 به محض تایید توسط مدیریت، معامله فعال شده و پیام اطلاع‌رسانی ارسال خواهد شد.`
+      );
+
+      // 3. Admin review card with approve and reject buttons
+      addSimulatorMessage(
+        'bot',
+        `🔔 **[پنل مدیریت] فیش واریزی جدید جهت بررسی و تایید:**\n📌 **معامله:** \`${cid}\`\n📝 **عنوان:** ${data.contract.title}\n💵 **مبلغ مورد انتظار:** ${data.contract.amount.toLocaleString('fa-IR')} تومان\n👤 **کارفرما:** ${data.contract.buyer_fullname || 'کارفرما'}\n🖼️ تصویر فیش واریزی ضمیمه گردید:`,
+        [
+          [
+            { text: '✅ تایید فیش و فعالسازی معامله', action: `admin_approve_receipt_${cid}`, style: 'success' },
+            { text: '❌ رد فیش واریزی', action: `admin_open_reject_${cid}`, style: 'danger' }
+          ]
+        ],
+        undefined,
+        receiptImg
+      );
     } catch (err: any) {
-      alert('خطا در پرداخت: ' + err.message);
+      showToast('❌ خطا در ارسال فیش: ' + (err.message || 'خطای نامشخص'));
     }
   };
 
+  // Admin Approve Receipt
+  const handleApproveReceipt = async (cid: string) => {
+    try {
+      const res = await fetch(`/api/contracts/${cid}/approve_receipt`, { method: 'POST' });
+      const data = await res.json();
+      await fetchData();
+      setSelectedContract(data.contract);
+      showToast('✅ فیش واریزی تایید شد و معامله با موفقیت فعال گردید.');
+      addSimulatorMessage(
+        'bot',
+        `🎉 **فیش واریزی معامله \`${cid}\` توسط مدیریت تایید گردید.**\n🔒 مبلغ **${data.contract.amount.toLocaleString('fa-IR')} تومان** در صندوق امن میانجی قفل شد.\n🚀 وضعیت پروژه به «🟢 در حال انجام» تغییر یافت و کار آغاز گردید.`
+      );
+    } catch (err: any) {
+      showToast('❌ خطا در تایید فیش: ' + (err.message || 'خطای نامشخص'));
+    }
+  };
+
+  // Admin Open Reject Modal
+  const handleOpenRejectModal = (cid: string) => {
+    const c = contracts.find(x => x.contract_id === cid);
+    setRejectModal({
+      cid,
+      title: c?.title || `معامله ${cid}`
+    });
+    setRejectReason('مغایرت در مبلغ واریزی با مفاد قرارداد');
+  };
+
+  // Admin Confirm Reject Receipt
+  const handleConfirmRejectReceipt = async (cid: string, reason: string) => {
+    try {
+      const res = await fetch(`/api/contracts/${cid}/reject_receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || 'مغایرت مبلغ یا عدم واریز به حساب' })
+      });
+      const data = await res.json();
+      setRejectModal(null);
+      await fetchData();
+      setSelectedContract(data.contract);
+      showToast('❌ فیش واریزی توسط مدیریت رد شد.');
+      addSimulatorMessage(
+        'bot',
+        `⚠️ **فیش واریزی معامله \`${cid}\` توسط مدیریت رد شد.**\n🚫 **علت رد:** ${reason || 'مغایرت مبلغ یا ناخوانا بودن فیش'}\n💡 لطفاً پس از بررسی، تصویر فیش معتبر را مجدداً ارسال فرمایید:`,
+        [
+          [
+            { text: '📸 ارسال مجدد فیش واریزی', action: `bot_send_receipt_${cid}` }
+          ]
+        ]
+      );
+    } catch (err: any) {
+      showToast('❌ خطا در رد فیش: ' + (err.message || 'خطای نامشخص'));
+    }
+  };
+
+  // Escrow Deliver & Finalize
   const handleDeliverProject = async (cid: string) => {
     try {
       const res = await fetch(`/api/contracts/${cid}/deliver`, { method: 'POST' });
@@ -372,12 +529,13 @@ export default function App() {
     }
   };
 
-  // Simulator Engine
+  // Simulator Message Dispatcher
   const addSimulatorMessage = (
     sender: 'bot' | 'user',
     text: string,
-    inlineButtons?: Array<Array<{ text: string; action: string }>>,
-    document?: { title: string; filename: string; contractId: string }
+    inlineButtons?: Array<Array<{ text: string; action: string; style?: 'primary' | 'danger' | 'success' }>>,
+    document?: { title: string; filename: string; contractId: string },
+    photo?: string
   ) => {
     setChatMessages(prev => [
       ...prev,
@@ -386,6 +544,7 @@ export default function App() {
         text,
         inlineButtons,
         document,
+        photo,
         timestamp: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
       }
     ]);
@@ -398,7 +557,58 @@ export default function App() {
     addSimulatorMessage('user', txt);
 
     setTimeout(() => {
+      // 1. Cancel handling (Fixed bug reported by user: Never says draft saved unless genuinely in contract wizard with draft data!)
+      if (
+        txt === '🔙 انصراف و بازگشت' ||
+        txt === '❌ انصراف و بازگشت به منو' ||
+        txt === '❌ انصراف' ||
+        txt === 'انصراف' ||
+        txt === '/cancel' ||
+        txt === 'لغو'
+      ) {
+        const wasInDraftWizardWithData =
+          simulatorContext === 'contract_wizard' &&
+          (draftForm.title.trim().length > 0 || Number(draftForm.amount) > 0);
+
+        setSimulatorContext('idle');
+        setShowDraftModal(false);
+        setReceiptModalContract(null);
+        setSignModalContract(null);
+
+        if (wasInDraftWizardWithData) {
+          addSimulatorMessage(
+            'bot',
+            '📁 پیش‌نویس معامله در بخش «معاملات من > پیش‌نویس‌های من» ذخیره گردید و به منوی اصلی بازگشتید.',
+            [
+              [
+                { text: '📁 مشاهده پیش‌نویس‌های من', action: 'bot_cmd_drafts' },
+                { text: '➕ ایجاد پیش‌نویس جدید', action: 'bot_cmd_new_draft' }
+              ],
+              [
+                { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' },
+                { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
+              ]
+            ]
+          );
+        } else {
+          // If in wallet, deposit, deals, or empty draft:
+          addSimulatorMessage('bot', '❌ عملیات لغو شد و به منوی اصلی بازگشتید.', [
+            [
+              { text: '🤝 ثبت معامله جدید', action: 'bot_cmd_new_draft' },
+              { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' }
+            ],
+            [
+              { text: '📁 پیش‌نویس‌های من', action: 'bot_cmd_drafts' },
+              { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
+            ]
+          ]);
+        }
+        return;
+      }
+
+      // 2. Drafts command
       if (txt === '📁 پیش‌نویس‌های من' || txt === 'پیش‌نویس‌ها' || txt.includes('پیش‌نویس')) {
+        setSimulatorContext('deals');
         const userDrafts = contracts.filter(c => c.status === 'draft');
         if (userDrafts.length === 0) {
           addSimulatorMessage('bot', '📁 **پیش‌نویس‌های من**\n\nشما در حال حاضر هیچ پیش‌نویس ذخیره‌شده‌ای ندارید. جهت ایجاد یک پیش‌نویس جدید روی دکمه زیر کلیک کنید:', [
@@ -411,22 +621,38 @@ export default function App() {
           addSimulatorMessage('bot', `📁 **لیست پیش‌نویس‌های شما (${userDrafts.length} عدد):**\nبرای ادامه هر پیش‌نویس روی دکمه «🚀 تکمیل و امضا» کلیک کنید:`, [
             ...userDrafts.map(d => [
               { text: `🚀 تکمیل و امضا: ${d.title.substring(0, 22)}...`, action: `bot_resume_${d.contract_id}` },
-              { text: `🗑 حذف`, action: `bot_delete_${d.contract_id}` }
+              { text: `🗑 حذف`, action: `bot_delete_${d.contract_id}`, style: 'danger' as const }
             ]),
             [{ text: '➕ ایجاد پیش‌نویس جدید دیگر', action: 'bot_cmd_new_draft' }]
           ]);
         }
       } else if (txt === '🤝 ثبت معامله جدید' || txt === '➕ ثبت معامله جدید') {
+        setSimulatorContext('contract_wizard');
         addSimulatorMessage('bot', '💼 **ایجاد پیش‌نویس قرارداد جدید**\n\n👤 لطفاً نقش خود را در این معامله مشخص کنید:', [
           [
             { text: '💼 کارفرما (خریدار)', action: 'bot_role_employer' },
             { text: '🛠 مجری (پیمانکار)', action: 'bot_role_freelancer' }
+          ],
+          [
+            { text: '❌ انصراف و بازگشت به منو', action: 'bot_cmd_cancel' }
+          ]
+        ]);
+      } else if (txt === '💳 کیف پول و اعتبار') {
+        setSimulatorContext('wallet');
+        addSimulatorMessage('bot', `💳 **کیف پول و موجودی میانجی**\n\n💰 موجودی قابل برداشت: \`${walletBalance.toLocaleString('fa-IR')} تومان\`\n🔒 موجودی بلوکه‌شده در امانت: \`۰ تومان\`\n\nجهت شارژ حساب یا ثبت درخواست برداشت از گزینه‌های زیر استفاده کنید:`, [
+          [
+            { text: '➕ شارژ حساب با فیش واریزی', action: 'bot_wallet_deposit' },
+            { text: '➖ درخواست تسویه به شبا', action: 'bot_wallet_withdraw' }
+          ],
+          [
+            { text: '🔙 انصراف و بازگشت', action: 'bot_cmd_cancel' }
           ]
         ]);
       } else if (txt === '📜 لیست معاملات من' || txt === '📜 معاملات من') {
+        setSimulatorContext('deals');
         const draftsCount = contracts.filter(c => c.status === 'draft').length;
         const activeCount = contracts.filter(c => c.status === 'active').length;
-        const pendingCount = contracts.filter(c => c.status === 'pending_party_b' || c.status === 'awaiting_payment').length;
+        const pendingCount = contracts.filter(c => c.status === 'pending_party_b' || c.status === 'awaiting_payment' || c.status === 'awaiting_receipt_approval').length;
         const completedCount = contracts.filter(c => c.status === 'completed').length;
         addSimulatorMessage('bot', `📑 **پنل مدیریت هوشمند معاملات شما**\n\n📊 **آمار کلی:**\n• درحال انجام: \`${activeCount}\`\n• در انتظار اقدام: \`${pendingCount}\`\n• پیش‌نویس‌ها: \`${draftsCount}\`\n• تکمیل شده: \`${completedCount}\``, [
           [
@@ -441,25 +667,108 @@ export default function App() {
             { text: '➕ ایجاد پیش‌نویس جدید', action: 'bot_cmd_new_draft' }
           ]
         ]);
-      } else {
-        addSimulatorMessage('bot', `درخواست دریافت شد: "${txt}".\nمی‌توانید از منوهای زیر جهت ساخت پیش‌نویس، بررسی معاملات یا امضای قرارداد استفاده فرمایید.`, [
+      } else if (txt === '/start' || txt === 'شروع') {
+        setSimulatorContext('idle');
+        addSimulatorMessage('bot', '👋 به سامانه هوشمند واسطه‌گری امن و ثبت رسمی قراردادهای میانجی خوش آمدید.\nجهت شروع یکی از گزینه‌های زیر را انتخاب نمایید:', [
           [
-            { text: '➕ ثبت پیش‌نویس جدید', action: 'bot_cmd_new_draft' },
+            { text: '🤝 ثبت معامله جدید', action: 'bot_cmd_new_draft' },
             { text: '📁 پیش‌نویس‌های من', action: 'bot_cmd_drafts' }
+          ],
+          [
+            { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' },
+            { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
+          ]
+        ]);
+      } else {
+        addSimulatorMessage('bot', `درخواست دریافت شد: "${txt}".\nمی‌توانید از منوهای زیر جهت ساخت پیش‌نویس، بررسی معاملات، ارسال فیش یا امضای قرارداد استفاده فرمایید:`, [
+          [
+            { text: '🤝 ثبت معامله جدید', action: 'bot_cmd_new_draft' },
+            { text: '📁 پیش‌نویس‌های من', action: 'bot_cmd_drafts' }
+          ],
+          [
+            { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' },
+            { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
           ]
         ]);
       }
-    }, 400);
+    }, 350);
   };
 
   const handleSimulatorAction = (action: string) => {
     if (action === 'bot_cmd_new_draft') {
+      setSimulatorContext('contract_wizard');
       setShowDraftModal(true);
-      addSimulatorMessage('bot', '📝 پنجره ایجاد پیش‌نویس قرارداد جدید در صفحه باز شد. مشخصات را وارد فرمایید تا در حافظه و دیتابیس ثبت گردد.');
+      addSimulatorMessage('bot', '📝 فرم ایجاد پیش‌نویس قرارداد جدید باز شد. مشخصات را وارد فرمایید تا در بخش پیش‌نویس‌ها ثبت گردد.');
+    } else if (action === 'bot_cmd_cancel') {
+      handleSimulatorSend('❌ انصراف');
     } else if (action === 'bot_cmd_drafts') {
       handleSimulatorSend('📁 پیش‌نویس‌های من');
     } else if (action === 'bot_cmd_my_deals') {
       handleSimulatorSend('📜 لیست معاملات من');
+    } else if (action === 'bot_cmd_wallet') {
+      handleSimulatorSend('💳 کیف پول و اعتبار');
+    } else if (action === 'bot_wallet_deposit') {
+      setSimulatorContext('deposit');
+      addSimulatorMessage('bot', '💳 **شارژ کیف پول میانجی با فیش بانکی**\n\nلطفاً مبلغ مورد نظر جهت شارژ را انتخاب فرمایید:', [
+        [
+          { text: '۵۰۰,۰۰۰ تومان', action: 'bot_dep_amt_500000' },
+          { text: '۱,۰۰۰,۰۰۰ تومان', action: 'bot_dep_amt_1000000' }
+        ],
+        [
+          { text: '۲,۰۰۰,۰۰۰ تومان', action: 'bot_dep_amt_2000000' },
+          { text: '۵,۰۰۰,۰۰۰ تومان', action: 'bot_dep_amt_5000000' }
+        ],
+        [
+          { text: '🔙 انصراف و بازگشت', action: 'bot_cmd_cancel' }
+        ]
+      ]);
+    } else if (action.startsWith('bot_dep_amt_')) {
+      const amtStr = action.replace('bot_dep_amt_', '');
+      const amt = Number(amtStr);
+      setSimulatorContext('deposit');
+      addSimulatorMessage('bot', `💳 **دستورالعمل واریز وجه جهت شارژ کیف پول**\n\n💰 مبلغ: **${amt.toLocaleString('fa-IR')} تومان**\n\nلطفاً مبلغ فوق را به شماره کارت زیر واریز کرده و تصویر فیش واریزی را ارسال نمایید:\n\n🏧 **شماره کارت:** \`6037-9975-7534-8211\`\n👤 **بنام:** امیررضا مجتبایی (حساب امانی میانجی)\n\nجهت ارسال فیش، روی دکمه زیر کلیک نمایید:`, [
+        [
+          { text: `📷 ارسال تصویر فیش واریزی (${amt.toLocaleString('fa-IR')} تومان)`, action: `bot_do_deposit_receipt_${amt}` }
+        ],
+        [
+          { text: '🔙 انصراف و بازگشت', action: 'bot_cmd_cancel' }
+        ]
+      ]);
+    } else if (action.startsWith('bot_do_deposit_receipt_')) {
+      const amt = Number(action.replace('bot_do_deposit_receipt_', ''));
+      const receiptImg = 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=400';
+      setSimulatorContext('idle');
+      addSimulatorMessage('user', `[📷 ارسال تصویر فیش شارژ به مبلغ ${amt.toLocaleString('fa-IR')} تومان]`, undefined, undefined, receiptImg);
+      addSimulatorMessage(
+        'bot',
+        `✅ **فیش واریزی شما دریافت شد.**\n\nفیش واریزی شارژ کیف پول به مبلغ **${amt.toLocaleString('fa-IR')} تومان** با موفقیت در سیستم ثبت گردید و در صف تایید مدیریت قرار گرفت.\n💡 پس از بررسی و تطبیق توسط ادمین، کیف پول شما به صورت آنی شارژ خواهد شد.`
+      );
+      addSimulatorMessage(
+        'bot',
+        `🏧 **[پنل مدیریت] درخواست شارژ کیف پول جدید:**\n💰 **مبلغ:** ${amt.toLocaleString('fa-IR')} تومان\n👤 **کاربر:** علیرضا رضوانی\n🖼️ تصویر فیش واریزی ضمیمه گردید:`,
+        [
+          [
+            { text: `✅ تایید شارژ (${amt.toLocaleString('fa-IR')} ت)`, action: `admin_approve_wallet_dep_${amt}`, style: 'success' },
+            { text: `❌ رد درخواست شارژ`, action: `admin_reject_wallet_dep_${amt}`, style: 'danger' }
+          ]
+        ],
+        undefined,
+        receiptImg
+      );
+    } else if (action.startsWith('admin_approve_wallet_dep_')) {
+      const amt = Number(action.replace('admin_approve_wallet_dep_', ''));
+      setWalletBalance(prev => prev + amt);
+      showToast(`✅ شارژ کیف پول به مبلغ ${amt.toLocaleString('fa-IR')} تومان تایید گردید.`);
+      addSimulatorMessage(
+        'bot',
+        `🎉 **درخواست شارژ توسط مدیریت تایید شد!**\nمبلغ **${amt.toLocaleString('fa-IR')} تومان** با موفقیت به موجودی کیف پول افزوده گردید.\n💰 موجودی جدید: **${(walletBalance + amt).toLocaleString('fa-IR')} تومان**`
+      );
+    } else if (action.startsWith('admin_reject_wallet_dep_')) {
+      showToast('❌ درخواست شارژ کیف پول رد شد.');
+      addSimulatorMessage(
+        'bot',
+        `⚠️ **درخواست شارژ کیف پول توسط مدیریت رد گردید.**\nعلت: مغایرت در واریز پایا یا ناخوانا بودن مشخصات فیش.\nلطفاً در صورت واریز وجه، تصویر واضح فیش را ارسال فرمایید.`
+      );
     } else if (action.startsWith('bot_resume_')) {
       const cid = action.replace('bot_resume_', '');
       const c = contracts.find(x => x.contract_id === cid);
@@ -471,9 +780,30 @@ export default function App() {
     } else if (action.startsWith('bot_delete_')) {
       const cid = action.replace('bot_delete_', '');
       handleDeleteDraft(cid);
+    } else if (action.startsWith('bot_send_receipt_')) {
+      const cid = action.replace('bot_send_receipt_', '');
+      const c = contracts.find(x => x.contract_id === cid);
+      if (c) {
+        setReceiptModalContract(c);
+      }
+    } else if (action.startsWith('admin_approve_receipt_')) {
+      const cid = action.replace('admin_approve_receipt_', '');
+      handleApproveReceipt(cid);
+    } else if (action.startsWith('admin_open_reject_') || action.startsWith('admin_reject_receipt_')) {
+      const cid = action.replace('admin_open_reject_', '').replace('admin_reject_receipt_', '');
+      handleOpenRejectModal(cid);
     } else if (action === 'bot_role_employer' || action === 'bot_role_freelancer') {
       setShowDraftModal(true);
       setDraftForm(prev => ({ ...prev, role: action === 'bot_role_employer' ? 'employer' : 'freelancer' }));
+    } else if (action === 'bot_filter_active') {
+      setFilterStatus('active');
+      showToast('فیلتر معاملات در حال انجام فعال شد.');
+    } else if (action === 'bot_filter_pending') {
+      setFilterStatus('pending');
+      showToast('فیلتر معاملات در انتظار اقدام فعال شد.');
+    } else if (action === 'bot_filter_completed') {
+      setFilterStatus('completed');
+      showToast('فیلتر معاملات تکمیل‌شده فعال شد.');
     }
   };
 
@@ -484,7 +814,9 @@ export default function App() {
       case 'pending_party_b':
         return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20"><Clock className="w-3.5 h-3.5" /> در انتظار امضای طرف دوم</span>;
       case 'awaiting_payment':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20"><CreditCard className="w-3.5 h-3.5" /> در انتظار واریز اسکرو</span>;
+        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20"><CreditCard className="w-3.5 h-3.5" /> در انتظار ارسال فیش واریزی</span>;
+      case 'awaiting_receipt_approval':
+        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"><Clock className="w-3.5 h-3.5" /> فیش ارسال شد - در انتظار تایید ادمین</span>;
       case 'active':
         return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"><Lock className="w-3.5 h-3.5" /> فعال (مبلغ در امانت)</span>;
       case 'work_submitted':
@@ -502,7 +834,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/20 selection:text-cyan-300">
       {/* Toast Notification */}
       {notification && (
-        <div className="fixed bottom-6 left-6 z-50 max-w-md bg-slate-900 border border-cyan-500/40 text-cyan-200 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-bounce">
+        <div className="fixed bottom-6 left-6 z-50 max-w-md bg-slate-900 border border-cyan-500/40 text-cyan-200 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3">
           <Sparkles className="w-5 h-5 text-cyan-400 shrink-0" />
           <span className="text-sm font-medium">{notification}</span>
         </div>
@@ -528,7 +860,10 @@ export default function App() {
 
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setShowDraftModal(true)}
+              onClick={() => {
+                setSimulatorContext('wizard');
+                setShowDraftModal(true);
+              }}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-medium text-sm shadow-lg shadow-cyan-500/25 hover:from-cyan-400 hover:to-blue-500 transition-all cursor-pointer"
             >
               <PlusCircle className="w-4 h-4" />
@@ -644,7 +979,7 @@ export default function App() {
                   <Clock className="w-4 h-4 text-blue-400" />
                 </div>
                 <div className="text-2xl font-extrabold text-blue-400">{stats?.pending ?? 0}</div>
-                <p className="text-xs text-slate-500 mt-1">امضای طرف دوم یا واریز وجه</p>
+                <p className="text-xs text-slate-500 mt-1">امضای طرف دوم یا ارسال فیش</p>
               </div>
 
               <div
@@ -701,7 +1036,7 @@ export default function App() {
                     filterStatus === 'pending' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  ⏳ در انتظار امضا/پرداخت
+                  ⏳ در انتظار امضا/فیش
                 </button>
                 <button
                   onClick={() => setFilterStatus('active')}
@@ -751,8 +1086,11 @@ export default function App() {
                     {filterStatus === 'draft' ? '📁 لیست پیش‌نویس‌های شما' : 'لیست معاملات'}
                   </h3>
                   <button
-                    onClick={() => setShowDraftModal(true)}
-                    className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-medium"
+                    onClick={() => {
+                      setSimulatorContext('wizard');
+                      setShowDraftModal(true);
+                    }}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-medium cursor-pointer"
                   >
                     <PlusCircle className="w-3.5 h-3.5" />
                     <span>➕ ایجاد پیش‌نویس جدید</span>
@@ -764,8 +1102,11 @@ export default function App() {
                     <FileText className="w-10 h-10 text-slate-600 mx-auto" />
                     <p className="text-sm text-slate-400">هیچ معامله یا پیش‌نویسی در این بخش یافت نشد.</p>
                     <button
-                      onClick={() => setShowDraftModal(true)}
-                      className="px-4 py-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 text-xs font-medium transition-all"
+                      onClick={() => {
+                        setSimulatorContext('wizard');
+                        setShowDraftModal(true);
+                      }}
+                      className="px-4 py-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 text-xs font-medium transition-all cursor-pointer"
                     >
                       ➕ ایجاد اولین پیش‌نویس معامله
                     </button>
@@ -809,14 +1150,14 @@ export default function App() {
                           <div className="flex items-center gap-2 pt-1" onClick={e => e.stopPropagation()}>
                             <button
                               onClick={() => openSignModal(c, 'employer')}
-                              className="flex-1 py-1.5 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-medium flex items-center justify-center gap-1 transition-all"
+                              className="flex-1 py-1.5 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-medium flex items-center justify-center gap-1 transition-all cursor-pointer"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                               <span>🚀 تکمیل و امضا</span>
                             </button>
                             <button
                               onClick={() => handleDeleteDraft(c.contract_id)}
-                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs transition-all"
+                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs transition-all cursor-pointer"
                               title="حذف پیش‌نویس"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -850,13 +1191,22 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <a
                           href={`/api/contracts/${selectedContract.contract_id}/pdf`}
+                          download={`Miyanji_Contract_${selectedContract.contract_id}.pdf`}
                           target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-medium border border-slate-700 transition-all"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
                         >
                           <Download className="w-4 h-4" />
                           <span>دانلود PDF رسمی</span>
                         </a>
+                        <button
+                          type="button"
+                          onClick={() => setPdfPreviewModal(selectedContract)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-medium border border-slate-700 transition-all cursor-pointer"
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>مشاهده سند</span>
+                        </button>
                       </div>
                     </div>
 
@@ -923,7 +1273,7 @@ export default function App() {
                             </button>
                             <button
                               onClick={() => handleDeleteDraft(selectedContract.contract_id)}
-                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700 transition-all"
+                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700 transition-all cursor-pointer"
                             >
                               <Trash2 className="w-4 h-4" />
                               <span>حذف پیش‌نویس</span>
@@ -950,7 +1300,7 @@ export default function App() {
                                   navigator.clipboard.writeText(`https://t.me/mianji_ir_bot?start=c_${selectedContract.contract_id}`);
                                   showToast('🔗 لینک دعوت کپی شد.');
                                 }}
-                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1 border border-slate-700"
+                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1 border border-slate-700 cursor-pointer"
                               >
                                 <Copy className="w-3.5 h-3.5" />
                                 <span>کپی لینک دعوت مجری</span>
@@ -959,15 +1309,48 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* If awaiting payment */}
+                        {/* If awaiting payment -> Show Upload Receipt button */}
                         {selectedContract.status === 'awaiting_payment' && (
-                          <button
-                            onClick={() => handleEscrowDeposit(selectedContract.contract_id)}
-                            className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/20 transition-all cursor-pointer"
-                          >
-                            <CreditCard className="w-4 h-4" />
-                            <span>💳 واریز وجه به صندوق امانت و فعال‌سازی پروژه</span>
-                          </button>
+                          <div className="w-full space-y-2">
+                            <p className="text-xs text-purple-300">
+                              قرارداد امضا شده است. کارفرما باید فیش واریز به شماره کارت میانجی را ارسال نماید:
+                            </p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setReceiptModalContract(selectedContract)}
+                                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/20 transition-all cursor-pointer"
+                              >
+                                <UploadCloud className="w-4 h-4" />
+                                <span>📸 ارسال فیش واریزی</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* If awaiting receipt approval -> Show Admin Review buttons */}
+                        {selectedContract.status === 'awaiting_receipt_approval' && (
+                          <div className="w-full space-y-3 bg-yellow-950/30 p-3.5 rounded-xl border border-yellow-500/30">
+                            <div className="flex items-center gap-2 text-xs font-bold text-yellow-400">
+                              <Clock className="w-4 h-4" />
+                              <span>فیش واریزی ارسال شده و در انتظار تایید مدیریت است:</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleApproveReceipt(selectedContract.contract_id)}
+                                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
+                              >
+                                <CheckCheck className="w-4 h-4" />
+                                <span>✅ تایید فیش و فعالسازی معامله</span>
+                              </button>
+                              <button
+                                onClick={() => handleOpenRejectModal(selectedContract.contract_id)}
+                                className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-rose-600/20 transition-all cursor-pointer"
+                              >
+                                <X className="w-4 h-4" />
+                                <span>❌ رد فیش واریزی</span>
+                              </button>
+                            </div>
+                          </div>
                         )}
 
                         {/* If active */}
@@ -982,7 +1365,7 @@ export default function App() {
                             </button>
                             <button
                               onClick={() => handleDispute(selectedContract.contract_id)}
-                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700"
+                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700 cursor-pointer"
                             >
                               <Scale className="w-4 h-4" />
                               <span>درخواست داوری</span>
@@ -1002,7 +1385,7 @@ export default function App() {
                             </button>
                             <button
                               onClick={() => handleDispute(selectedContract.contract_id)}
-                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700"
+                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700 cursor-pointer"
                             >
                               <Scale className="w-4 h-4" />
                               <span>درخواست داوری</span>
@@ -1052,10 +1435,10 @@ export default function App() {
         {activeTab === 'simulator' && (
           <div className="max-w-4xl mx-auto space-y-4">
             <div className="p-4 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-xs text-cyan-300 flex items-center justify-between">
-              <span>🤖 **محیط تست زنده ربات تلگرام میانجی:** می‌توانید بخش پیش‌نویس‌ها، ایجاد قرارداد جدید، تایید و دریافت فایل PDF را در قالب تلگرام بیازمایید.</span>
+              <span>🤖 **محیط تست زنده ربات تلگرام میانجی:** می‌توانید بخش پیش‌نویس‌ها، ارسال فیش، تایید مدیریت و دریافت آنی فایل PDF را در قالب تلگرام بیازمایید.</span>
               <button
                 onClick={() => setChatMessages([chatMessages[0]])}
-                className="text-xs underline text-cyan-400 hover:text-cyan-200"
+                className="text-xs underline text-cyan-400 hover:text-cyan-200 cursor-pointer"
               >
                 پاک‌سازی گفتگو
               </button>
@@ -1099,6 +1482,17 @@ export default function App() {
                     >
                       <div className="whitespace-pre-line">{msg.text}</div>
 
+                      {/* Photo Attachment if present */}
+                      {msg.photo && (
+                        <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-700/60 max-w-xs shadow-md">
+                          <img src={msg.photo} alt="فیش واریزی" className="w-full h-44 object-cover" />
+                          <div className="px-2.5 py-1 bg-slate-950/90 flex items-center justify-between text-[11px] text-slate-400">
+                            <span>تصویر فیش واریزی بانکی</span>
+                            <span className="text-emerald-400 font-mono">JPG / PNG</span>
+                          </div>
+                        </div>
+                      )}
+
                       {/* PDF Document Attachment in Chat */}
                       {msg.document && (
                         <div className="mt-3 p-3 rounded-xl bg-slate-950/80 border border-cyan-500/30 flex items-center justify-between gap-3">
@@ -1109,15 +1503,30 @@ export default function App() {
                               <span className="text-[10px] text-cyan-300 block">سند رسمی قرارداد امضا شده</span>
                             </div>
                           </div>
-                          <a
-                            href={`/api/contracts/${msg.document.contractId}/pdf`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="px-3 py-1.5 rounded-lg bg-cyan-500 text-slate-950 font-bold text-xs hover:bg-cyan-400 flex items-center gap-1"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            <span>دانلود</span>
-                          </a>
+                          <div className="flex items-center gap-1.5">
+                            <a
+                              href={`/api/contracts/${msg.document.contractId}/pdf`}
+                              download={`Miyanji_Contract_${msg.document.contractId}.pdf`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1 transition-all"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>دانلود PDF</span>
+                            </a>
+                            <button
+                              onClick={() => {
+                                const c = contracts.find(x => x.contract_id === msg.document!.contractId);
+                                if (c) {
+                                  setSelectedContract(c);
+                                  setPdfPreviewModal(c);
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-medium border border-slate-700"
+                            >
+                              مشاهده
+                            </button>
+                          </div>
                         </div>
                       )}
 
@@ -1135,7 +1544,13 @@ export default function App() {
                               <button
                                 key={bIdx}
                                 onClick={() => handleSimulatorAction(btn.action)}
-                                className="flex-1 py-2 px-3 rounded-xl bg-slate-800/90 hover:bg-cyan-900/40 text-cyan-300 hover:text-white border border-slate-700/80 text-xs font-medium text-center transition-all cursor-pointer shadow-sm"
+                                className={`flex-1 py-2 px-3 rounded-xl border text-xs font-medium text-center transition-all cursor-pointer shadow-sm ${
+                                  btn.style === 'success'
+                                    ? 'bg-emerald-600/90 hover:bg-emerald-500 text-white border-emerald-500'
+                                    : btn.style === 'danger'
+                                    ? 'bg-rose-600/90 hover:bg-rose-500 text-white border-rose-500'
+                                    : 'bg-slate-800/90 hover:bg-cyan-900/40 text-cyan-300 hover:text-white border-slate-700/80'
+                                }`}
                               >
                                 {btn.text}
                               </button>
@@ -1148,7 +1563,7 @@ export default function App() {
                 ))}
               </div>
 
-              {/* Bot Reply Keyboards (Quick action buttons at bottom) */}
+              {/* Bot Reply Keyboards */}
               <div className="bg-slate-900 border-t border-slate-800 p-2 grid grid-cols-2 gap-2">
                 <button
                   onClick={() => handleSimulatorSend('🤝 ثبت معامله جدید')}
@@ -1175,6 +1590,12 @@ export default function App() {
                 >
                   💳 کیف پول و اعتبار
                 </button>
+                <button
+                  onClick={() => handleSimulatorSend('❌ انصراف')}
+                  className="col-span-2 py-1.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white text-xs text-center border border-slate-800 cursor-pointer"
+                >
+                  ❌ انصراف و بازگشت به منو
+                </button>
               </div>
 
               {/* Input Bar */}
@@ -1185,9 +1606,26 @@ export default function App() {
                 }}
                 className="bg-slate-950 p-3 border-t border-slate-800 flex items-center gap-2"
               >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = contracts.find(c => c.status === 'awaiting_payment' || c.status === 'awaiting_receipt_approval') || selectedContract || contracts[0];
+                    if (target) {
+                      setReceiptModalContract(target);
+                    } else {
+                      showToast('معامله‌ای جهت ارسال فیش انتخاب نشده است.');
+                    }
+                  }}
+                  title="ارسال فیش واریزی معامله"
+                  className="px-3 py-2.5 rounded-xl bg-purple-950/80 hover:bg-purple-900/80 text-purple-300 border border-purple-800/50 transition-all flex items-center gap-1.5 cursor-pointer shrink-0 text-xs font-semibold"
+                >
+                  <UploadCloud className="w-4 h-4 text-purple-400" />
+                  <span className="hidden sm:inline">ارسال فیش</span>
+                </button>
+
                 <input
                   type="text"
-                  placeholder="نوشتن پیام یا دستور (مانند /start یا پیش‌نویس)..."
+                  placeholder="نوشتن پیام یا دستور (مانند /start یا پیش‌نویس یا انصراف)..."
                   value={simulatorInput}
                   onChange={e => setSimulatorInput(e.target.value)}
                   className="flex-1 bg-slate-900 border border-slate-800 px-4 py-2.5 rounded-xl text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
@@ -1213,15 +1651,18 @@ export default function App() {
               </div>
 
               {selectedContract && (
-                <a
-                  href={`/api/contracts/${selectedContract.contract_id}/pdf`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20"
+                <button
+                  onClick={() => handleDownloadPdf(selectedContract.contract_id)}
+                  disabled={downloadingId === selectedContract.contract_id}
+                  className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 cursor-pointer disabled:opacity-50"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>دانلود فایل PDF رسمی</span>
-                </a>
+                  {downloadingId === selectedContract.contract_id ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  <span>دانلود مستقیم فایل PDF</span>
+                </button>
               )}
             </div>
 
@@ -1348,13 +1789,13 @@ export default function App() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleApproveWork(c.contract_id)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold"
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold cursor-pointer"
                         >
                           آزادسازی به مجری
                         </button>
                         <button
                           onClick={() => alert(`مبلغ به حساب کارفرما مسترد گردید.`)}
-                          className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold"
+                          className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold cursor-pointer"
                         >
                           استرداد به کارفرما
                         </button>
@@ -1437,6 +1878,70 @@ export default function App() {
         )}
       </main>
 
+      {/* Modal: Receipt Upload */}
+      {receiptModalContract && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <UploadCloud className="w-5 h-5 text-purple-400" />
+                <span>ارسال فیش واریزی به امانت</span>
+              </h3>
+              <button
+                onClick={() => setReceiptModalContract(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="text-xs space-y-3">
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <span className="text-slate-500 block">اطلاعات حساب واریز میانجی:</span>
+                <span className="font-mono text-cyan-400 font-bold block text-sm">6037-9975-7534-8211</span>
+                <span className="text-slate-300 block">بنام: امیررضا مجتبایی (حساب امانی سامانه)</span>
+                <div className="pt-2 border-t border-slate-800 mt-2 flex justify-between">
+                  <span className="text-slate-400">مبلغ واریزی:</span>
+                  <span className="font-bold text-cyan-400 text-sm">
+                    {receiptModalContract.amount.toLocaleString('fa-IR')} تومان
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl border border-dashed border-slate-700 bg-slate-950 text-center space-y-2">
+                <UploadCloud className="w-8 h-8 text-slate-400 mx-auto" />
+                <p className="text-slate-300 font-semibold">تصویر فیش واریزی بانکی</p>
+                <p className="text-slate-500 text-[11px]">فرمت‌های JPG، PNG یا فایل PDF تاییدیه بانک</p>
+                <button
+                  type="button"
+                  onClick={() => setReceiptImage('https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=400')}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-medium cursor-pointer"
+                >
+                  {receiptImage ? '✅ تصویر فیش ضمیمه شد' : '📷 انتخاب یا شبیه‌سازی فیش'}
+                </button>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setReceiptModalContract(null)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSubmitReceipt(receiptModalContract.contract_id)}
+                  className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold shadow-lg shadow-purple-600/20 cursor-pointer"
+                >
+                  ارسال فیش جهت تایید ادمین
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal: New Draft Creation Wizard */}
       {showDraftModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1447,8 +1952,11 @@ export default function App() {
                 <span>ایجاد پیش‌نویس قرارداد جدید</span>
               </h3>
               <button
-                onClick={() => setShowDraftModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
+                onClick={() => {
+                  setSimulatorContext('idle');
+                  setShowDraftModal(false);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1461,7 +1969,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setDraftForm(p => ({ ...p, role: 'employer' }))}
-                    className={`py-2 px-3 rounded-xl border text-center transition-all ${
+                    className={`py-2 px-3 rounded-xl border text-center transition-all cursor-pointer ${
                       draftForm.role === 'employer'
                         ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold'
                         : 'border-slate-800 text-slate-400 hover:bg-slate-800'
@@ -1472,7 +1980,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setDraftForm(p => ({ ...p, role: 'freelancer' }))}
-                    className={`py-2 px-3 rounded-xl border text-center transition-all ${
+                    className={`py-2 px-3 rounded-xl border text-center transition-all cursor-pointer ${
                       draftForm.role === 'freelancer'
                         ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold'
                         : 'border-slate-800 text-slate-400 hover:bg-slate-800'
@@ -1565,14 +2073,17 @@ export default function App() {
               <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setShowDraftModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium"
+                  onClick={() => {
+                    setSimulatorContext('idle');
+                    setShowDraftModal(false);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
                 >
                   انصراف
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold shadow-lg shadow-cyan-500/20"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold shadow-lg shadow-cyan-500/20 cursor-pointer"
                 >
                   💾 ذخیره در پیش‌نویس‌ها
                 </button>
@@ -1593,7 +2104,7 @@ export default function App() {
               </h3>
               <button
                 onClick={() => setSignModalContract(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1641,7 +2152,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setSignStep('otp')}
-                    className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold mt-2"
+                    className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold mt-2 cursor-pointer"
                   >
                     مرحله بعد: دریافت کد تایید OTP
                   </button>
@@ -1669,20 +2180,237 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setSignStep('details')}
-                      className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium"
+                      className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
                     >
                       ویرایش اطلاعات
                     </button>
                     <button
                       type="button"
                       onClick={handleExecuteSign}
-                      className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold shadow-lg shadow-emerald-500/20"
+                      className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold shadow-lg shadow-emerald-500/20 cursor-pointer"
                     >
                       تایید نهایی و ثبت رسمی امضا
                     </button>
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal: Admin Reject Receipt with Reason */}
+      {rejectModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-base font-bold text-rose-400 flex items-center gap-2">
+                <X className="w-5 h-5 text-rose-500" />
+                <span>رد فیش واریزی معامله</span>
+              </h3>
+              <button
+                onClick={() => setRejectModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="text-xs space-y-3">
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <span className="text-slate-500 block">شناسه معامله:</span>
+                <span className="font-mono text-cyan-400 font-bold block">{rejectModal.cid}</span>
+                <span className="text-slate-300 block mt-1">{rejectModal.title}</span>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-2">علت رد فیش واریزی را انتخاب یا وارد کنید:</label>
+                <div className="space-y-2">
+                  {[
+                    'مغایرت در مبلغ واریزی با مفاد قرارداد',
+                    'تصویر فیش ناخوانا، تار یا ناقص است',
+                    'عدم واریز به حساب امانت میانجی (عدم تایید سامانه پایا/شاپرک)',
+                    'فیش واریزی تکراری یا منقضی شده است'
+                  ].map((preset, idx) => (
+                    <label
+                      key={idx}
+                      className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        rejectReason === preset
+                          ? 'bg-rose-950/40 border-rose-500/60 text-rose-300 font-medium'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="rejectReason"
+                        checked={rejectReason === preset}
+                        onChange={() => setRejectReason(preset)}
+                        className="text-rose-500"
+                      />
+                      <span>{preset}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="mt-3">
+                  <label className="block text-slate-400 mb-1">علت دلخواه یا توضیحات تکمیلی:</label>
+                  <input
+                    type="text"
+                    value={rejectReason}
+                    onChange={e => setRejectReason(e.target.value)}
+                    placeholder="علت رد فیش..."
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-rose-500 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRejectModal(null)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleConfirmRejectReceipt(rejectModal.cid, rejectReason)}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
+                >
+                  ثبت و رد قطعی فیش
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Official PDF Certificate Preview & Direct Download */}
+      {pdfPreviewModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl my-8">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-cyan-400" />
+                  <span>سند رسمی قرارداد الکترونیک میانجی</span>
+                </h3>
+                <span className="text-xs text-slate-400 font-mono mt-0.5 block">
+                  شناسه قرارداد: {pdfPreviewModal.contract_id}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={`/api/contracts/${pdfPreviewModal.contract_id}/pdf`}
+                  download={`Miyanji_Contract_${pdfPreviewModal.contract_id}.pdf`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-500/20"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>دانلود فایل PDF</span>
+                </a>
+                <button
+                  onClick={() => window.print()}
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700 cursor-pointer"
+                  title="چاپ سند"
+                >
+                  🖨️
+                </button>
+                <button
+                  onClick={() => setPdfPreviewModal(null)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Visual Certificate Paper */}
+            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5 text-xs text-slate-300">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+                <div>
+                  <span className="text-[10px] text-cyan-400 font-mono tracking-wider">MIYANJI ESCROW OFFICIAL CERTIFICATE</span>
+                  <h4 className="text-sm font-bold text-white mt-0.5">گواهی رسمی قرارداد الکترونیک و داوری الزام‌آور</h4>
+                </div>
+                <div className="text-left font-mono">
+                  <span className="text-[10px] text-slate-400 block">کد رهگیری:</span>
+                  <span className="text-xs font-bold text-cyan-300">{pdfPreviewModal.contract_id}</span>
+                </div>
+              </div>
+
+              {/* Subject */}
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+                <span className="text-slate-400 block text-[11px] mb-1">موضوع قرارداد:</span>
+                <span className="text-white font-bold text-sm block">{pdfPreviewModal.title}</span>
+                <p className="text-slate-400 mt-1.5 text-[11px] leading-relaxed">{pdfPreviewModal.description}</p>
+              </div>
+
+              {/* Financial & Terms */}
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                  <span className="text-slate-500 block text-[10px]">مبلغ قرارداد</span>
+                  <span className="text-cyan-400 font-bold text-xs mt-1 block">
+                    {pdfPreviewModal.amount.toLocaleString('fa-IR')} تومان
+                  </span>
+                  <span className="text-[9px] text-emerald-400">تضمین امانت اسکرو</span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                  <span className="text-slate-500 block text-[10px]">مهلت اجرا</span>
+                  <span className="text-white font-bold text-xs mt-1 block">
+                    {pdfPreviewModal.deadline} روز کاری
+                  </span>
+                  <span className="text-[9px] text-slate-400">از تاریخ شروع</span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                  <span className="text-slate-500 block text-[10px]">وضعیت حقوقی</span>
+                  <span className="text-emerald-400 font-bold text-xs mt-1 block">
+                    معتبر و لازم‌الاجرا
+                  </span>
+                  <span className="text-[9px] text-cyan-400">قانون تجارت الکترونیک</span>
+                </div>
+              </div>
+
+              {/* Parties */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-1">
+                  <span className="text-cyan-400 font-bold text-[11px] block">طرف اول (کارفرما / خریدار):</span>
+                  <span className="text-white font-semibold block">{pdfPreviewModal.buyer_fullname || 'کارفرما'}</span>
+                  <span className="text-slate-400 text-[10px] block font-mono">تلفن: {pdfPreviewModal.buyer_phone || 'ثبت شده'}</span>
+                  <span className="text-emerald-400 text-[10px] block font-medium">
+                    {pdfPreviewModal.buyer_signed_at ? '✅ امضا شده با کد یکبار مصرف OTP' : '⏳ در انتظار امضا'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-1">
+                  <span className="text-cyan-400 font-bold text-[11px] block">طرف دوم (مجری / پیمانکار):</span>
+                  <span className="text-white font-semibold block">{pdfPreviewModal.seller_fullname || (pdfPreviewModal.seller_signed_at ? 'مجری پروژه' : 'در انتظار تایید دعوت')}</span>
+                  <span className="text-slate-400 text-[10px] block font-mono">تلفن: {pdfPreviewModal.seller_phone || 'ثبت شده'}</span>
+                  <span className="text-emerald-400 text-[10px] block font-medium">
+                    {pdfPreviewModal.seller_signed_at ? '✅ امضا شده با کد یکبار مصرف OTP' : '⏳ در انتظار امضا'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Legal Hash & Seal */}
+              <div className="p-3 rounded-xl bg-slate-900/40 border border-cyan-900/30 flex items-center justify-between text-[10px]">
+                <div className="space-y-0.5">
+                  <span className="text-cyan-400 font-bold block">مهر دیجیتال و تاییدیه رسمی میانجی:</span>
+                  <span className="text-slate-400 font-mono block">SHA-256 Digest: e7f3a8b94091c8019a2b84fbc90d18e24fa68b92</span>
+                  <span className="text-emerald-400">مشمول ماده ۱۰ قانون مدنی و مواد ۶ الی ۱۲ قانون تجارت الکترونیک</span>
+                </div>
+                <div className="p-2 rounded-lg bg-cyan-950 border border-cyan-800/40 text-center text-cyan-300 font-bold">
+                  ✓ تایید شده
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPdfPreviewModal(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
+              >
+                بستن پنجره
+              </button>
             </div>
           </div>
         </div>

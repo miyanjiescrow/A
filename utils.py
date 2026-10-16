@@ -4,7 +4,10 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, Tuple, List
-from telebot import TeleBot
+try:
+    from telebot import TeleBot
+except ImportError:
+    TeleBot = Any
 from config import config
 
 logger = logging.getLogger("Miyanji_Utils")
@@ -986,25 +989,54 @@ def send_admin_alert(bot, text: str, content_type: str = "text", file_id=None, r
 
     # ۱. بایگانی در MJNOTE (فقط اگر فایل باشد - بدون متن طولانی)
     if mjnote_id and file_id:
-        archive_document(bot, file_id, content_type, caption=text[:400], parse_mode=parse_mode)
+        try:
+            archive_document(bot, file_id, content_type, caption=text[:400], parse_mode=parse_mode)
+        except Exception as e:
+            logger.warning(f"Error archiving to MJNOTE: {e}")
 
-    # ۲. تعیین اهداف عملیاتی
+    # ۲. تعیین اهداف عملیاتی (همواره شامل پیوی ادمین‌ها به همراه دکمه‌های تایید و رد)
     targets = []
-    if is_actionable:
-        if admin_channel and admin_channel != 0:
-            targets.append(admin_channel)
-        else:
-            targets.extend(admin_ids)
+    
+    # افزودن تمام شناسه‌های ادمین به عنوان مقصد قطعی
+    raw_admin_ids = getattr(config, "ADMIN_IDS", []) or []
+    if isinstance(raw_admin_ids, str):
+        admin_list = [int(x.strip()) for x in raw_admin_ids.split(",") if x.strip().isdigit()]
+    elif isinstance(raw_admin_ids, (list, tuple, set)):
+        admin_list = [int(x) for x in raw_admin_ids if str(x).strip().isdigit()]
     else:
-        # اگر اکشن‌دار نباشد (مثلاً اعلان تکمیل یا لاگ)، فقط به پیوی ادمین‌ها می‌رود
-        targets.extend(admin_ids)
+        admin_list = []
+    
+    for aid in admin_list:
+        if aid and aid not in targets:
+            targets.append(aid)
+
+    single_admin = getattr(config, "ADMIN_ID", None)
+    if single_admin:
+        try:
+            s_aid = int(str(single_admin).strip())
+            if s_aid and s_aid not in targets:
+                targets.append(s_aid)
+        except:
+            pass
+
+    owner = getattr(config, "OWNER_ID", None)
+    if owner:
+        try:
+            o_aid = int(str(owner).strip())
+            if o_aid and o_aid not in targets:
+                targets.append(o_aid)
+        except:
+            pass
+
+    # افزودن کانال مدیریت در صورت تنظیم
+    if admin_channel and admin_channel != 0 and admin_channel not in targets:
+        targets.append(admin_channel)
 
     for target in targets:
         try:
-            # دکمه‌ها فقط در پیوی (chat_id > 0) ارسال می‌شوند
-            actual_markup = reply_markup if target > 0 else None
-            # برای کانال متن را کوتاه می‌کنیم
             actual_text = text[:1024] if target < 0 else text
+            # ارسال دکمه‌های شیشه‌ای تایید/رد
+            actual_markup = reply_markup
 
             if file_id and content_type in ["photo", "document"]:
                 if content_type == "photo":

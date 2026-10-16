@@ -412,19 +412,40 @@ def register_user_handlers(bot: TeleBot):
         if not maintenance_check(message): return
         user_id = message.from_user.id
         state_tuple = db.get_user_state(user_id)
+        current_state = state_tuple[0] if isinstance(state_tuple, tuple) and len(state_tuple) > 0 else ""
         state_data = state_tuple[1] if isinstance(state_tuple, tuple) and len(state_tuple) > 1 else {}
         draft = state_data.get("contract_draft") if isinstance(state_data, dict) else None
         cid = state_data.get("contract_id") if isinstance(state_data, dict) else None
-        if draft and isinstance(draft, dict):
+
+        # بررسی اینکه آیا کاربر واقعاً در فرآیند تنظیم یا امضای قرارداد بوده است
+        wizard_states = [
+            "WAITING_ROLE_SELECTION", "WAITING_CATEGORY_SELECTION", "WAITING_WIZARD_TITLE",
+            "WAITING_WIZARD_AMOUNT", "WAITING_WIZARD_COMMISSION_PAYER", "WAITING_WIZARD_DEADLINE",
+            "WAITING_WIZARD_DEADLINE_CUSTOM", "WAITING_WIZARD_MS_ASK", "WAITING_WIZARD_DESCRIPTION",
+            "WAITING_FREE_EDITS_CHOICE", "WAITING_CUSTOM_FREE_EDITS", "WAITING_PREVIEW_CONFIRM",
+            "WAITING_FIELD_EDIT", "WAITING_SIGN_CONFIRM", "WAITING_SIGNATURE_OTP"
+        ]
+        is_in_contract_wizard = bool(
+            current_state in wizard_states or
+            (isinstance(current_state, str) and current_state.startswith("WAITING_WIZARD_"))
+        )
+        has_actual_draft_content = bool(
+            isinstance(draft, dict) and (draft.get("title") or draft.get("amount") or draft.get("category"))
+        )
+
+        if is_in_contract_wizard and has_actual_draft_content:
             if not draft.get("title"):
                 draft["title"] = "پیش‌نویس در حال تنظیم"
             db.save_user_draft(user_id, draft, contract_id=cid)
+            cancel_msg = "❌ فرآیند ساخت معامله متوقف شد. پیش‌نویس شما در بخش «معاملات من > پیش‌نویس‌های من» ذخیره گردید و به منوی اصلی بازگشتید."
+        else:
+            cancel_msg = "❌ عملیات لغو شد و به منوی اصلی بازگشتید."
 
         db.clear_user_state(user_id)
         is_admin = is_admin_user(user_id)
         bot.send_message(
             message.chat.id,
-            "❌ عملیات ذخیره شد. پیش‌نویس شما در بخش «معاملات من > پیش‌نویس‌های من» در دسترس است و به منوی اصلی بازگشتید.",
+            cancel_msg,
             reply_markup=_get_main_menu_for_user(user_id, is_admin)
         )
 
@@ -3988,16 +4009,20 @@ def register_user_handlers(bot: TeleBot):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("upload_receipt_"))
     def handle_upload_receipt_start(call: CallbackQuery):
-        """شروع مرحلهٔ ارسال فیش واریزی توسط کارفرما (بخشی که قبلاً هیچ هندلری نداشت)"""
         user_id = call.from_user.id
-        user_info = db.get_user(user_id)
-        
-        if not user_info.get("is_verified"):
-            bot.answer_callback_query(call.id, "⚠️ برای امنیت تراکنش‌ها، ابتدا باید احراز هویت خود را تکمیل کنید.", show_alert=True)
-            start_kyc_process(call.message.chat.id, user_id, resume_data=call.data)
+        cid = call.data.replace("upload_receipt_", "", 1)
+        contract = db.get_contract(cid)
+        if not contract:
+            bot.answer_callback_query(call.id, "❌ معامله یافت نشد.", show_alert=True)
             return
 
-        cid = call.data.replace("upload_receipt_", "", 1)
+        user_info = db.get_user(user_id) or {}
+        amount = utils.safe_float(contract.get("amount", 0))
+        threshold = float(getattr(config, "IDENTITY_VERIFICATION_THRESHOLD", 3000000))
+        if amount >= threshold and not user_info.get("is_verified") and not user_info.get("national_id"):
+            bot.answer_callback_query(call.id, "⚠️ با توجه به مبلغ معامله، ابتدا باید احراز هویت اولیه را تکمیل کنید.", show_alert=True)
+            start_kyc_process(call.message.chat.id, user_id, resume_data=call.data)
+            return
         contract = db.get_contract(cid)
         if not contract:
             bot.answer_callback_query(call.id, "❌ معامله یافت نشد.", show_alert=True)
@@ -4103,25 +4128,34 @@ def register_user_handlers(bot: TeleBot):
                 "لطفاً مبلغ واریزی را با مبلغ بالا مطابقت دهید."
             )
             
-            callback_id = f"ee:{cid}" if is_extra_edit else cid
-            utils.send_admin_alert(
-                bot,
-                content_type="photo",
-                file_id=file_id,
-                text=admin_caption + f"\n\n📢 #فیش_{'ویرایش' if is_extra_edit else 'جدید'}",
-                reply_markup=kb.get_receipt_admin_approval_inline(callback_id, user_id)
-            )
-
             try:
                 bot.delete_message(message.chat.id, proc_msg.message_id)
             except:
                 pass
 
+            # ارسال فوری پیام تایید دریافت فیش به کاربر
             bot.send_message(
                 message.chat.id,
-                "✅ **فیش واریزی شما دریافت شد و جهت تایید برای مدیریت ارسال گردید.**",
-                reply_markup=kb.get_main_menu(is_admin)
+                f"✅ **فیش واریزی معامله `{cid}` با موفقیت دریافت شد.**\n\n"
+                f"💰 **مبلغ فیش:** {utils.format_currency(price_to_show)}\n"
+                "⏳ فیش به همراه مشخصات معامله برای بررسی و تایید به تیم مدیریت ارسال گردید.\n"
+                "💡 به محض تایید توسط مدیریت، معامله فعال شده و پیام اطلاع‌رسانی برای شما و طرف مقابل ارسال خواهد شد.",
+                parse_mode="Markdown",
+                reply_markup=_get_main_menu_for_user(user_id, is_admin)
             )
+
+            # ارسال مطمئن برای ادمین‌ها و کانال مدیریت به همراه دکمه‌های تایید و رد
+            callback_id = f"ee:{cid}" if is_extra_edit else cid
+            try:
+                utils.send_admin_alert(
+                    bot,
+                    content_type="photo" if message.photo else "document",
+                    file_id=file_id,
+                    text=admin_caption + f"\n\n📢 #فیش_{'ویرایش' if is_extra_edit else 'جدید'}",
+                    reply_markup=kb.get_receipt_admin_approval_inline(callback_id, user_id)
+                )
+            except Exception as e_alert:
+                logger.error(f"Error alerting admin of receipt for deal {cid}: {e_alert}")
         except Exception as e:
             logger.error(f"Critical error in handle_receipt_photo: {e}")
             bot.send_message(message.chat.id, "⚠️ متأسفانه خطایی در فرآیند ثبت فیش رخ داد. لطفاً با پشتیبانی تماس بگیرید.")

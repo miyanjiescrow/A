@@ -4,47 +4,55 @@ import re
 import logging
 import sys
 import traceback
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.units import mm
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.units import mm
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+    A4 = (595.27, 841.89)
+    colors = None
+    mm = 2.83465
 
 from config import config
 import utils
+import urllib.request
 
 logger = logging.getLogger("Miyanji_PDF")
 
 # لاگ مشخصات سیستم برای عیب‌یابی در محیط رندر
 logger.info(f"PDF System Info: Python {sys.version} | Platform: {sys.platform}")
-try:
-    import reportlab
-    logger.info(f"ReportLab version: {reportlab.Version}")
-except ImportError:
-    logger.error("ReportLab is NOT installed!")
+if not REPORTLAB_AVAILABLE:
+    logger.warning("ReportLab is NOT installed! PDF generation will use local Node.js PDF service.")
 
 # ====================================================
 # ۱. تنظیمات بصری و رنگ‌بندی (Modern Minimalist)
 # ====================================================
-COLORS = {
-    "primary": colors.HexColor("#0F172A"),   # Deep Navy
-    "secondary": colors.HexColor("#F8FAFC"), # Light Slate Background
-    "bg_main": colors.HexColor("#F8FAFC"),   # Bone/Light Gray Page Background
-    "bg_card": colors.HexColor("#F1F5F9"),   # Card Background
-    "accent_cyan": colors.HexColor("#0EA5E9"),
-    "accent_gold": colors.HexColor("#D97706"),
-    "text_main": colors.HexColor("#334155"),
-    "text_light": colors.HexColor("#64748b"),
-    "border": colors.HexColor("#E2E8F0"),
-    "white": colors.white,
-    "success": colors.HexColor("#10B981"),
-    "warning": colors.HexColor("#F59E0B"),
-    "danger": colors.HexColor("#EF4444"),
-}
+if REPORTLAB_AVAILABLE:
+    COLORS = {
+        "primary": colors.HexColor("#0F172A"),   # Deep Navy
+        "secondary": colors.HexColor("#F8FAFC"), # Light Slate Background
+        "bg_main": colors.HexColor("#F8FAFC"),   # Bone/Light Gray Page Background
+        "bg_card": colors.HexColor("#F1F5F9"),   # Card Background
+        "accent_cyan": colors.HexColor("#0EA5E9"),
+        "accent_gold": colors.HexColor("#D97706"),
+        "text_main": colors.HexColor("#334155"),
+        "text_light": colors.HexColor("#64748b"),
+        "border": colors.HexColor("#E2E8F0"),
+        "white": colors.white,
+        "success": colors.HexColor("#10B981"),
+        "warning": colors.HexColor("#F59E0B"),
+        "danger": colors.HexColor("#EF4444"),
+    }
+else:
+    COLORS = {}
 
 # ====================================================
 # ۲. بارگذاری فونت و ابزارهای RTL
@@ -90,21 +98,20 @@ if not os.path.exists(Vazir_Bold):
 PERSIAN_FONT = "Helvetica"
 PERSIAN_FONT_BOLD = "Helvetica-Bold"
 
-import httpx
-
 def download_font_if_missing(file_path: str, url: str):
     """دانلود فونت در صورت عدم وجود در مسیر مشخص شده"""
     if not os.path.exists(file_path):
         try:
             logger.info(f"Font {os.path.basename(file_path)} missing. Attempting download...")
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            response = httpx.get(url, follow_redirects=True, timeout=10.0)
-            if response.status_code == 200:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                content = resp.read()
                 with open(file_path, "wb") as f:
-                    f.write(response.content)
+                    f.write(content)
                 logger.info(f"Font downloaded successfully: {file_path}")
-            else:
-                logger.warning(f"Failed to download font. Status: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Failed to download font: {e}")
         except Exception as e:
             logger.warning(f"Notice downloading font: {e}")
 
@@ -163,7 +170,11 @@ def register_fonts():
         PERSIAN_FONT = "Helvetica"
         PERSIAN_FONT_BOLD = "Helvetica-Bold"
 
-register_fonts()
+if REPORTLAB_AVAILABLE:
+    register_fonts()
+else:
+    PERSIAN_FONT = "Helvetica"
+    PERSIAN_FONT_BOLD = "Helvetica-Bold"
 
 try:
     import arabic_reshaper
@@ -248,48 +259,67 @@ def get_status_fa(status_en: str) -> str:
 # ====================================================
 # ۴. کلاس سفارشی کانواس برای فوتر و شماره صفحه
 # ====================================================
-class ContractCanvas(canvas.Canvas):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.pages = []
+if REPORTLAB_AVAILABLE:
+    class ContractCanvas(canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.pages = []
 
-    def showPage(self):
-        self.pages.append(dict(self.__dict__))
-        self._startPage()
+        def showPage(self):
+            self.pages.append(dict(self.__dict__))
+            self._startPage()
 
-    def save(self):
-        page_count = len(self.pages)
-        for page in self.pages:
-            self.__dict__.update(page)
-            self.draw_canvas_extras(page_count)
-            super().showPage()
-        super().save()
+        def save(self):
+            page_count = len(self.pages)
+            for page in self.pages:
+                self.__dict__.update(page)
+                self.draw_canvas_extras(page_count)
+                super().showPage()
+            super().save()
 
-    def draw_canvas_extras(self, page_count):
-        self.saveState()
-        
-        # Footer
-        self.setFont(PERSIAN_FONT, 8)
-        self.setFillColor(COLORS["text_light"])
-        
-        # خط فوتر
-        self.setStrokeColor(COLORS["border"])
-        self.setLineWidth(0.5)
-        self.line(20*mm, 15*mm, 190*mm, 15*mm)
-        
-        # متن فوتر
-        footer_left = reshape_text(f"صفحه {self._pageNumber} از {page_count}")
-        footer_right = reshape_text("سند الکترونیکی معتبر سامانه میانجی - mianji.io")
-        
-        self.drawString(20*mm, 10*mm, footer_left)
-        self.drawRightString(190*mm, 10*mm, footer_right)
-        
-        self.restoreState()
+        def draw_canvas_extras(self, page_count):
+            self.saveState()
+            
+            # Footer
+            self.setFont(PERSIAN_FONT, 8)
+            self.setFillColor(COLORS["text_light"])
+            
+            # خط فوتر
+            self.setStrokeColor(COLORS["border"])
+            self.setLineWidth(0.5)
+            self.line(20*mm, 15*mm, 190*mm, 15*mm)
+            
+            # متن فوتر
+            footer_left = reshape_text(f"صفحه {self._pageNumber} از {page_count}")
+            footer_right = reshape_text("سند الکترونیکی معتبر سامانه میانجی - mianji.io")
+            
+            self.drawString(20*mm, 10*mm, footer_left)
+            self.drawRightString(190*mm, 10*mm, footer_right)
+            
+            self.restoreState()
+else:
+    class ContractCanvas:
+        pass
 
 # ====================================================
 # ۵. تابع اصلی ساخت PDF
 # ====================================================
 def build_contract_pdf(contract_data: dict, buyer_user: dict = None, seller_user: dict = None) -> io.BytesIO:
+    cid = str(contract_data.get("contract_id") or contract_data.get("id", "---"))
+    if not REPORTLAB_AVAILABLE:
+        try:
+            url = f"http://127.0.0.1:3000/api/contracts/{cid}/pdf"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Miyanji-Python-Bot/1.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                pdf_bytes = resp.read()
+                logger.info(f"PDF fetched successfully from Node service for {cid} ({len(pdf_bytes)} bytes)")
+                return io.BytesIO(pdf_bytes)
+        except Exception as e:
+            logger.error(f"Error fetching PDF from local Node service for {cid}: {e}")
+            # Fallback simple valid PDF buffer
+            dummy = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 595 842]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000052 00000 n \n0000000101 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n168\n%%EOF"
+            return io.BytesIO(dummy)
+
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,

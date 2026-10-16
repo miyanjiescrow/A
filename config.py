@@ -1,8 +1,9 @@
 import os
-from dotenv import load_dotenv
-
-# بارگذاری متغیرهای محیطی از فایل .env در محیط توسعه محلی
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 class Config:
     # ----------------------------------------------------
