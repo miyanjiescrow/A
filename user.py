@@ -3839,24 +3839,22 @@ def register_user_handlers(bot: TeleBot):
 
         logger.info(f"🏁 [POST_SIGN] Finalizing deal {cid}. Staged: {is_staged}")
 
-    # ✅ FIX: Delete old contract card messages before celebrating
-    # حذف پیام‌های قدیمی (کارت دعوت و دکمه‌های امضا)
-    for uid in {u for u in (buyer_id, seller_id) if u}:
-        try:
-            _, state_data = db.get_user_state(uid)
-            if state_data:
-                old_msg_id = state_data.get("old_contract_card_msg_id")
-                if old_msg_id:
-                    try:
-                        bot.delete_message(uid, old_msg_id)
-                        logger.info(f"✅ Deleted old contract card message {old_msg_id} for user {uid}")
-                    except Exception as e:
-                        logger.warning(f"Could not delete old message {old_msg_id} for user {uid}: {e}")
-            # پاکسازی state برای این کاربر
-            db.clear_user_state(uid)
-        except Exception as e:
-            logger.warning(f"Error clearing state for user {uid}: {e}")
-
+        # ✅ حذف پیام‌های قدیمی (کارت دعوت و دکمه‌های امضا)
+        for uid in {u for u in (buyer_id, seller_id) if u}:
+            try:
+                _, state_data = db.get_user_state(uid)
+                if state_data:
+                    old_msg_id = state_data.get("old_contract_card_msg_id")
+                    if old_msg_id:
+                        try:
+                            bot.delete_message(uid, old_msg_id)
+                            logger.info(f"✅ Deleted old contract card message {old_msg_id} for user {uid}")
+                        except Exception as e:
+                            logger.warning(f"Could not delete old message {old_msg_id} for user {uid}: {e}")
+                # پاکسازی state برای این کاربر
+                db.clear_user_state(uid)
+            except Exception as e:
+                logger.warning(f"Error clearing state for user {uid}: {e}")
 
         # ۱. ارسال سند رسمی به هر دو طرف و MJNOTE
         send_contract_pdf_to_parties(bot, contract)

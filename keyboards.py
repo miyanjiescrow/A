@@ -71,6 +71,9 @@ def get_contract_preview_inline(draft_id: str = "draft") -> InlineKeyboardMarkup
         InlineKeyboardButton("✏️ ویرایش پیش‌نویس", callback_data=f"edit_draft_{draft_id}")
     )
     markup.add(
+        InlineKeyboardButton("📑 پیش‌نمایش و دریافت PDF", callback_data=f"get_pdf_{draft_id}")
+    )
+    markup.add(
         InlineKeyboardButton("💾 ذخیره در پیش‌نویس‌ها", callback_data="save_draft_exit"),
         InlineKeyboardButton("🗑 حذف و لغو پیش‌نویس", callback_data="cancel_draft")
     )
@@ -714,12 +717,13 @@ def get_ambassador_terms_inline() -> InlineKeyboardMarkup:
     )
     return markup
 
-def get_ambassador_dashboard_inline(stats: dict) -> InlineKeyboardMarkup:
+def get_ambassador_dashboard_inline(stats: Optional[Dict[str, Any]] = None) -> InlineKeyboardMarkup:
     """
     پنل شیشه‌ای جامع سفیران (B2B Dashboard)
     شامل آمار، لینک دعوت، پکیج تبلیغاتی و تسویه حساب.
     """
     markup = InlineKeyboardMarkup(row_width=2)
+    stats = stats or {}
     
     # ردیف اول: آمار (فقط نمایش، دکمه‌های غیرعملیاتی یا نمایشی)
     try:
