@@ -1,42 +1,64 @@
 import React, { useState, useEffect } from 'react';
 import {
+  Shield,
+  ShieldCheck,
+  CreditCard,
   FileText,
-  CheckCircle2,
   Clock,
+  CheckCircle2,
   AlertTriangle,
+  Users,
+  Search,
   PlusCircle,
   Download,
   Send,
   Trash2,
   Edit3,
-  Shield,
-  ShieldCheck,
-  Scale,
-  CreditCard,
-  Users,
-  Search,
-  RefreshCw,
-  ArrowRight,
-  Lock,
-  Check,
-  X,
-  ExternalLink,
-  Eye,
   Copy,
+  ExternalLink,
   Smartphone,
   Layers,
-  HelpCircle,
+  ArrowRight,
+  ArrowLeft,
+  X,
+  Check,
+  Info,
+  DollarSign,
+  TrendingUp,
+  Award,
+  MessageSquare,
+  Paperclip,
+  Share2,
+  Lock,
+  Unlock,
+  Building2,
+  FileCheck2,
+  RefreshCw,
+  LogOut,
+  ChevronDown,
   ChevronRight,
-  FileCheck,
-  Sparkles,
-  UploadCloud,
-  CheckCheck
+  Eye,
+  Percent
 } from 'lucide-react';
 
-interface Milestone {
-  title: string;
-  amount: number;
-  status: 'pending' | 'paid' | 'delivered' | 'completed';
+// ====================================================
+// Type Definitions
+// ====================================================
+
+interface UserProfile {
+  id: number;
+  telegram_id?: number;
+  full_name: string;
+  phone_number: string;
+  national_id?: string;
+  sheba?: string;
+  role: 'employer' | 'freelancer' | 'arbitrator';
+  wallet_balance: number;
+  escrow_locked_balance: number;
+  kyc_level: 'basic' | 'silver' | 'gold';
+  kyc_status: 'unverified' | 'pending' | 'verified' | 'rejected';
+  referral_code: string;
+  created_at: string;
 }
 
 interface Contract {
@@ -44,7 +66,7 @@ interface Contract {
   contract_id: string;
   title: string;
   amount: number;
-  category: string;
+  category: 'DEV' | 'DS' | 'CNT' | 'MKT' | 'GEN';
   deadline: number;
   description: string;
   free_edits: number;
@@ -58,124 +80,183 @@ interface Contract {
   buyer_phone?: string;
   buyer_national_id?: string;
   buyer_signed_at?: string;
-  buyer_otp_verified?: boolean;
   seller_id?: number;
   seller_fullname?: string;
   seller_phone?: string;
   seller_national_id?: string;
   seller_signed_at?: string;
-  seller_otp_verified?: boolean;
-  milestones?: Milestone[];
-  staged_payment?: boolean;
+  deliverables?: {
+    notes?: string;
+    links?: string[];
+    submitted_at?: string;
+  };
+  dispute_id?: string;
   history: Array<{ event: string; timestamp: string; actor?: string }>;
   created_at: string;
 }
 
-interface Stats {
-  active: number;
-  pending: number;
-  drafts: number;
-  completed: number;
-  cancelled: number;
-  totalVolume: number;
-  contractsCount: number;
-  commissionRate: number;
+interface WalletTransaction {
+  id: string;
+  user_id: number;
+  type: 'deposit' | 'withdraw' | 'escrow_lock' | 'escrow_release' | 'commission' | 'affiliate_reward' | 'refund';
+  amount: number;
+  title: string;
+  status: 'completed' | 'pending' | 'rejected';
+  ref_id: string;
+  contract_id?: string;
+  created_at: string;
+}
+
+interface DisputeMessage {
+  id: string;
+  sender_id: number;
+  sender_name: string;
+  sender_role: 'buyer' | 'seller' | 'arbitrator';
+  text: string;
+  attachment?: string;
+  timestamp: string;
+}
+
+interface DisputeCase {
+  id: string;
+  contract_id: string;
+  contract_title: string;
+  claimant_id: number;
+  claimant_name: string;
+  reason: string;
+  description: string;
+  evidence_files: string[];
+  status: 'under_review' | 'evidence_gathering' | 'arbitration_decision' | 'resolved';
+  ruling?: {
+    decision: 'refund_buyer' | 'pay_seller' | 'split_50_50';
+    arbitrator_name: string;
+    comment: string;
+    resolved_at: string;
+  };
+  messages: DisputeMessage[];
+  created_at: string;
+}
+
+interface AffiliateStats {
+  referral_code: string;
+  referral_link: string;
+  total_clicks: number;
+  total_invited: number;
+  active_traders: number;
+  total_commission_earned: number;
+  withdrawable_commission: number;
+  commission_rate_percent: number;
+  referral_history: Array<{
+    user_name: string;
+    signed_up_at: string;
+    contracts_count: number;
+    earned_amount: number;
+  }>;
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'contracts' | 'simulator' | 'pdf_view' | 'arbitration' | 'wallet'>('contracts');
-  const [contracts, setContracts] = useState<Contract[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [notification, setNotification] = useState<string | null>(null);
+  // Navigation & View Mode
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'contracts' | 'new_contract' | 'kyc' | 'disputes' | 'affiliate'>('dashboard');
+  const [viewMode, setViewMode] = useState<'desktop' | 'telegram'>('desktop');
+  const [isTelegramClient, setIsTelegramClient] = useState(false);
 
-  // New Draft Modal State
-  const [showDraftModal, setShowDraftModal] = useState(false);
-  const [draftForm, setDraftForm] = useState({
+  // User & Data States
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [contracts, setContracts] = useState<Contract[]>([]);
+  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+  const [disputes, setDisputes] = useState<DisputeCase[]>([]);
+  const [affiliateStats, setAffiliateStats] = useState<AffiliateStats | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Contracts Filter & Selection
+  const [contractFilter, setContractFilter] = useState<'all' | 'active' | 'pending' | 'draft' | 'completed' | 'in_dispute'>('all');
+  const [contractSearch, setContractSearch] = useState('');
+  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
+
+  // Modals
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const [depositAmount, setDepositAmount] = useState('5000000');
+  const [depositMethod, setDepositMethod] = useState<'gateway' | 'card_to_card'>('gateway');
+
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawSheba, setWithdrawSheba] = useState('');
+
+  const [showDeliverModal, setShowDeliverModal] = useState<Contract | null>(null);
+  const [deliverNotes, setDeliverNotes] = useState('');
+  const [deliverLink, setDeliverLink] = useState('');
+
+  const [showDisputeModal, setShowDisputeModal] = useState<Contract | null>(null);
+  const [disputeReason, setDisputeReason] = useState('تاخیر در تحویل و عدم پاسخگویی طرف قرارداد');
+  const [disputeDetails, setDisputeDetails] = useState('');
+
+  const [selectedDispute, setSelectedDispute] = useState<DisputeCase | null>(null);
+  const [newDisputeMsg, setNewDisputeMsg] = useState('');
+
+  // New Contract Form State
+  const [newContractForm, setNewContractForm] = useState({
     title: '',
-    amount: '',
     role: 'employer',
-    category: 'DEV',
+    counterparty_name: '',
+    counterparty_phone: '',
+    amount: '',
     deadline: '7',
-    free_edits: '3',
-    commission_payer: 'freelancer',
+    category: 'DEV' as 'DEV' | 'DS' | 'CNT' | 'MKT' | 'GEN',
+    commission_payer: 'freelancer' as 'freelancer' | 'employer' | 'split',
+    free_edits: '2',
     description: '',
-    signer_fullname: 'علیرضا رضوانی',
-    signer_phone: '09121112233',
-    signer_national_id: '0012345678'
+    as_draft: false
   });
 
-  // Sign Modal State
-  const [signModalContract, setSignModalContract] = useState<Contract | null>(null);
-  const [signRole, setSignRole] = useState<'employer' | 'freelancer'>('employer');
-  const [signerName, setSignerName] = useState('');
-  const [signerPhone, setSignerPhone] = useState('');
-  const [signerNid, setSignerNid] = useState('');
-  const [otpCode, setOtpCode] = useState('849201');
-  const [otpInput, setOtpInput] = useState('');
-  const [signStep, setSignStep] = useState<'details' | 'otp'>('details');
+  // KYC Form State
+  const [kycNid, setKycNid] = useState('');
+  const [kycSheba, setKycSheba] = useState('');
+  const [kycSubmitting, setKycSubmitting] = useState(false);
 
-  // Receipt Modal State
-  const [receiptModalContract, setReceiptModalContract] = useState<Contract | null>(null);
-  const [receiptImage, setReceiptImage] = useState<string | null>(null);
+  // Toast Helper
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
 
-  // Reject Receipt Modal State
-  const [rejectModal, setRejectModal] = useState<{ cid: string; title: string } | null>(null);
-  const [rejectReason, setRejectReason] = useState('مغایرت در مبلغ واریزی با مفاد قرارداد');
-
-  // PDF Preview Certificate Modal State
-  const [pdfPreviewModal, setPdfPreviewModal] = useState<Contract | null>(null);
-
-  // User Simulated Wallet Balance
-  const [walletBalance, setWalletBalance] = useState<number>(0);
-
-  // Simulator Context & Chat State
-  const [simulatorContext, setSimulatorContext] = useState<'idle' | 'wallet' | 'deposit' | 'contract_wizard' | 'deals'>('idle');
-  const [chatMessages, setChatMessages] = useState<Array<{
-    sender: 'bot' | 'user';
-    text: string;
-    inlineButtons?: Array<Array<{ text: string; action: string; style?: 'primary' | 'danger' | 'success' }>>;
-    document?: { title: string; filename: string; contractId: string };
-    photo?: string;
-    timestamp: string;
-  }>>([
-    {
-      sender: 'bot',
-      text: '👋 سلام به سامانه هوشمند میانجی (Miyanji Escrow) خوش آمدید!\nپلتفرم ثبت قراردادهای الکترونیک و واسطه‌گری امن در بستر تلگرام.\nاز منوی زیر می‌توانید معاملات، پیش‌نویس‌ها و واریزها را مدیریت کنید:',
-      inlineButtons: [
-        [
-          { text: '➕ ثبت پیش‌نویس جدید', action: 'bot_cmd_new_draft' },
-          { text: '📁 پیش‌نویس‌های من', action: 'bot_cmd_drafts' }
-        ],
-        [
-          { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' },
-          { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
-        ]
-      ],
-      timestamp: 'هم‌اکنون'
+  // Check if running inside actual Telegram WebApp
+  useEffect(() => {
+    const tg = (window as any).Telegram?.WebApp;
+    if (tg && tg.initDataUnsafe?.user) {
+      setIsTelegramClient(true);
+      setViewMode('telegram');
+      tg.ready();
+      tg.expand();
+      tg.setHeaderColor?.('#1D4ED8');
     }
-  ]);
-  const [simulatorInput, setSimulatorInput] = useState('');
+  }, []);
 
-  // Fetch contracts & stats
-  const fetchData = async () => {
+  // Fetch Initial Data
+  const loadInitialData = async () => {
     try {
       setLoading(true);
-      const [resContracts, resStats] = await Promise.all([
+      const [uRes, cRes, tRes, dRes, aRes] = await Promise.all([
+        fetch('/api/auth/me').then(r => r.json()),
         fetch('/api/contracts').then(r => r.json()),
-        fetch('/api/stats').then(r => r.json())
+        fetch('/api/wallet/transactions').then(r => r.json()),
+        fetch('/api/disputes').then(r => r.json()),
+        fetch('/api/affiliate').then(r => r.json())
       ]);
-      setContracts(resContracts);
-      setStats(resStats);
-      if (resContracts.length > 0 && !selectedContract) {
-        setSelectedContract(resContracts[0]);
-      } else if (selectedContract) {
-        const updated = resContracts.find((x: Contract) => x.contract_id === selectedContract.contract_id);
-        if (updated) setSelectedContract(updated);
+
+      setCurrentUser(uRes);
+      setContracts(cRes);
+      setTransactions(tRes);
+      setDisputes(dRes);
+      setAffiliateStats(aRes);
+
+      if (uRes.sheba) {
+        setWithdrawSheba(uRes.sheba);
+        setKycSheba(uRes.sheba);
+      }
+      if (uRes.national_id) {
+        setKycNid(uRes.national_id);
       }
     } catch (err) {
       console.error('Error fetching data:', err);
@@ -185,2231 +266,1724 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchData();
+    loadInitialData();
   }, []);
 
-  const showToast = (msg: string) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(null), 4500);
+  // Switch Demo User
+  const handleSwitchUser = async (userId: number) => {
+    try {
+      const res = await fetch('/api/auth/switch_user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCurrentUser(data.user);
+        showToast(`کاربر به «${data.user.full_name}» تغییر یافت.`);
+        loadInitialData();
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  // Robust In-Iframe Blob PDF Downloader & Certificate Viewer
+  // Deposit Action
+  const handleDeposit = async () => {
+    const amt = Number(depositAmount);
+    if (!amt || amt < 10000) {
+      showToast('لطفاً مبلغ معتبری بالای ۱۰,۰۰۰ تومان وارد کنید.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/wallet/deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: amt, method: depositMethod })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message);
+        setShowDepositModal(false);
+        loadInitialData();
+      } else {
+        showToast(data.error || 'خطا در افزایش موجودی');
+      }
+    } catch (err) {
+      showToast('خطا در اتصال به سرور');
+    }
+  };
+
+  // Withdraw Action
+  const handleWithdraw = async () => {
+    const amt = Number(withdrawAmount);
+    if (!amt || amt <= 0) {
+      showToast('لطفاً مبلغ برداشت را مشخص کنید.');
+      return;
+    }
+    if (currentUser && amt > currentUser.wallet_balance) {
+      showToast('موجودی قابل برداشت شما کافی نیست.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/wallet/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: amt, sheba: withdrawSheba })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message);
+        setShowWithdrawModal(false);
+        setWithdrawAmount('');
+        loadInitialData();
+      } else {
+        showToast(data.error || 'خطا در ثبت درخواست برداشت');
+      }
+    } catch (err) {
+      showToast('خطا در اتصال به سرور');
+    }
+  };
+
+  // Escrow Pay / Fund
+  const handleFundEscrow = async (contractId: string) => {
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/pay`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ وجه در صندوق اسکرو میانجی قفل شد و پروژه آغاز گردید.');
+        loadInitialData();
+        if (selectedContract) setSelectedContract(data.contract);
+      } else {
+        showToast(data.error || 'خطا در تامین وجه');
+      }
+    } catch (err) {
+      showToast('خطا در ارتباط با سرور');
+    }
+  };
+
+  // Submit Deliverables
+  const handleDeliverSubmit = async () => {
+    if (!showDeliverModal) return;
+    try {
+      const res = await fetch(`/api/contracts/${showDeliverModal.contract_id}/deliver`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notes: deliverNotes,
+          links: deliverLink ? [deliverLink] : []
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('📦 خروجی‌های پروژه برای کارفرما ارسال گردید.');
+        setShowDeliverModal(null);
+        setDeliverNotes('');
+        setDeliverLink('');
+        loadInitialData();
+        if (selectedContract) setSelectedContract(data.contract);
+      }
+    } catch (e) {
+      showToast('خطا در ثبت تحویل کار');
+    }
+  };
+
+  // Approve & Release Funds
+  const handleApproveRelease = async (contractId: string) => {
+    if (!window.confirm('آیا از تایید نهایی کار و آزادسازی وجه امانت به حساب مجری اطمینان دارید؟')) return;
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/approve`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🏁 تایید نهایی انجام شد و مبلغ به کیف پول مجری تسویه گردید.');
+        loadInitialData();
+        if (selectedContract) setSelectedContract(data.contract);
+      }
+    } catch (e) {
+      showToast('خطا در آزادسازی وجه');
+    }
+  };
+
+  // Cancel Contract
+  const handleCancelContract = async (contractId: string) => {
+    if (!window.confirm('آیا مطمئن هستید که می‌خواهید این معامله را لغو کنید؟')) return;
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/cancel`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('قرارداد لغو گردید و وجه به موجودی شما بازگشت.');
+        loadInitialData();
+        if (selectedContract) setSelectedContract(data.contract);
+      }
+    } catch (e) {
+      showToast('خطا در لغو قرارداد');
+    }
+  };
+
+  // Submit Dispute
+  const handleSubmitDispute = async () => {
+    if (!showDisputeModal) return;
+    try {
+      const res = await fetch('/api/disputes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract_id: showDisputeModal.contract_id,
+          reason: disputeReason,
+          description: disputeDetails
+        })
+      });
+      const data = await res.json();
+      if (data.id) {
+        showToast('⚖️ پرونده اختلاف با موفقیت ثبت شد و به داوری ارجاع داده شد.');
+        setShowDisputeModal(null);
+        setDisputeDetails('');
+        loadInitialData();
+        setActiveTab('disputes');
+        setSelectedDispute(data);
+      }
+    } catch (e) {
+      showToast('خطا در ثبت اختلاف');
+    }
+  };
+
+  // Send Dispute Message
+  const handleSendDisputeMessage = async () => {
+    if (!selectedDispute || !newDisputeMsg.trim()) return;
+    try {
+      const res = await fetch(`/api/disputes/${selectedDispute.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: newDisputeMsg })
+      });
+      const msg = await res.json();
+      if (msg.id) {
+        setSelectedDispute({
+          ...selectedDispute,
+          messages: [...selectedDispute.messages, msg]
+        });
+        setNewDisputeMsg('');
+        loadInitialData();
+      }
+    } catch (e) {
+      showToast('خطا در ارسال پیام');
+    }
+  };
+
+  // Resolve Dispute (Arbitrator Action)
+  const handleResolveDispute = async (decision: 'refund_buyer' | 'pay_seller' | 'split_50_50') => {
+    if (!selectedDispute) return;
+    try {
+      const res = await fetch(`/api/disputes/${selectedDispute.id}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision,
+          comment: `بر اساس بررسی اسناد و گفتگوها، رأی نهایی (${decision}) صادر گردید.`
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('⚖️ رأی قطعی داوری با موفقیت ثبت و اجرا شد.');
+        loadInitialData();
+        setSelectedDispute(data.dispute);
+      }
+    } catch (e) {
+      showToast('خطا در صدور رأی');
+    }
+  };
+
+  // Create Contract Submit
+  const handleCreateContract = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newContractForm.title || !newContractForm.amount) {
+      showToast('لطفاً عنوان و مبلغ قرارداد را وارد نمایید.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/contracts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: newContractForm.title,
+          amount: Number(newContractForm.amount),
+          category: newContractForm.category,
+          deadline: Number(newContractForm.deadline),
+          description: newContractForm.description,
+          commission_payer: newContractForm.commission_payer,
+          free_edits: Number(newContractForm.free_edits),
+          counterparty_name: newContractForm.counterparty_name || 'طرف دوم معامله',
+          counterparty_phone: newContractForm.counterparty_phone || '09350000000',
+          as_draft: newContractForm.as_draft
+        })
+      });
+      const data = await res.json();
+      if (data.contract_id) {
+        showToast(newContractForm.as_draft ? 'پیش‌نویس ذخیره شد.' : 'قرارداد ثبت شد و برای طرف دوم ارسال گردید.');
+        setNewContractForm({
+          title: '',
+          role: 'employer',
+          counterparty_name: '',
+          counterparty_phone: '',
+          amount: '',
+          deadline: '7',
+          category: 'DEV',
+          commission_payer: 'freelancer',
+          free_edits: '2',
+          description: '',
+          as_draft: false
+        });
+        loadInitialData();
+        setActiveTab('contracts');
+        setSelectedContract(data);
+      }
+    } catch (e) {
+      showToast('خطا در ثبت قرارداد');
+    }
+  };
+
+  // Submit KYC
+  const handleKycSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setKycSubmitting(true);
+    try {
+      const res = await fetch('/api/kyc/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          national_id: kycNid,
+          sheba: kycSheba
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ احراز هویت با موفقیت تایید شد و حساب شما به سطح طلایی ارتقا یافت.');
+        loadInitialData();
+      } else {
+        showToast(data.error || 'خطا در اعتبارسنجی اطلاعات هویتی');
+      }
+    } catch (e) {
+      showToast('خطا در ثبت اطلاعات احراز هویت');
+    } finally {
+      setKycSubmitting(false);
+    }
+  };
+
+  // Withdraw Affiliate Earnings
+  const handleClaimAffiliate = async () => {
+    try {
+      const res = await fetch('/api/affiliate/withdraw', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message);
+        loadInitialData();
+      }
+    } catch (e) {
+      showToast('خطا در انتقال سود');
+    }
+  };
+
+  // Download PDF Contract
   const handleDownloadPdf = async (contractId: string) => {
     try {
-      setDownloadingId(contractId);
-      showToast('⏳ در حال آماده‌سازی و دانلود فایل PDF رسمی...');
-
+      setDownloadingPdf(contractId);
+      showToast('در حال آماده‌سازی و دانلود فایل PDF رسمی سند معامله...');
       const response = await fetch(`/api/contracts/${contractId}/pdf`);
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => null);
-        throw new Error(errJson?.error || `خطا در دریافت PDF (کد ${response.status})`);
-      }
-
+      if (!response.ok) throw new Error('دانلود ناموفق بود.');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `Miyanji_Contract_${contractId}.pdf`;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
       document.body.appendChild(a);
       a.click();
-
-      // Delay revoking URL so browser download thread completes smoothly
-      setTimeout(() => {
-        try {
-          if (a.parentNode) a.parentNode.removeChild(a);
-          window.URL.revokeObjectURL(url);
-        } catch {
-          // ignore cleanup errors
-        }
-      }, 60000);
-
-      showToast('✅ فایل PDF صادر و بارگیری آغاز گردید.');
-
-      // Also open official PDF certificate preview modal for immediate viewing & printing
-      const c = contracts.find(x => x.contract_id === contractId);
-      if (c) {
-        setSelectedContract(c);
-        setPdfPreviewModal(c);
-      }
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      showToast('✅ فایل PDF قرارداد با موفقیت دانلود شد.');
     } catch (err: any) {
-      console.error('Download error:', err);
-      showToast('❌ خطا در دریافت فایل PDF: ' + (err.message || 'خطای نامشخص'));
+      showToast('خطا در دانلود PDF: ' + err.message);
     } finally {
-      setDownloadingId(null);
+      setDownloadingPdf(null);
     }
   };
 
-  // Filtered contracts
+  // Copy to clipboard helper
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    showToast(`${label} در حافظه کپی شد.`);
+  };
+
+  // Filtered Contracts
   const filteredContracts = contracts.filter(c => {
     const matchesFilter =
-      filterStatus === 'all' ? true :
-      filterStatus === 'draft' ? c.status === 'draft' :
-      filterStatus === 'pending' ? (c.status === 'pending_party_b' || c.status === 'awaiting_payment' || c.status === 'awaiting_receipt_approval') :
-      filterStatus === 'active' ? (c.status === 'active' || c.status === 'work_submitted') :
-      filterStatus === 'completed' ? c.status === 'completed' :
-      filterStatus === 'cancelled' ? c.status === 'cancelled' :
-      filterStatus === 'in_dispute' ? c.status === 'in_dispute' : true;
+      contractFilter === 'all' ? true :
+      contractFilter === 'active' ? (c.status === 'active' || c.status === 'work_submitted') :
+      contractFilter === 'pending' ? (c.status === 'pending_party_b' || c.status === 'awaiting_payment' || c.status === 'awaiting_receipt_approval') :
+      contractFilter === 'draft' ? (c.status === 'draft') :
+      contractFilter === 'completed' ? (c.status === 'completed') :
+      contractFilter === 'in_dispute' ? (c.status === 'in_dispute') : true;
 
     const matchesSearch =
-      !searchQuery.trim() ||
-      c.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.contract_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.buyer_fullname && c.buyer_fullname.includes(searchQuery)) ||
-      (c.seller_fullname && c.seller_fullname.includes(searchQuery));
+      contractSearch === '' ||
+      c.title.toLowerCase().includes(contractSearch.toLowerCase()) ||
+      c.contract_id.toLowerCase().includes(contractSearch.toLowerCase()) ||
+      (c.buyer_fullname && c.buyer_fullname.toLowerCase().includes(contractSearch.toLowerCase())) ||
+      (c.seller_fullname && c.seller_fullname.toLowerCase().includes(contractSearch.toLowerCase()));
 
     return matchesFilter && matchesSearch;
   });
 
-  // Handle Save New Draft
-  const handleSaveDraft = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draftForm.title.trim()) {
-      alert('لطفاً عنوان معامله را وارد کنید.');
-      return;
-    }
-
-    try {
-      const payload = {
-        title: draftForm.title,
-        amount: Number(draftForm.amount) || 0,
-        category: draftForm.category,
-        deadline: Number(draftForm.deadline) || 7,
-        free_edits: Number(draftForm.free_edits) || 3,
-        commission_payer: draftForm.commission_payer,
-        description: draftForm.description,
-        role: draftForm.role,
-        signer_fullname: draftForm.signer_fullname,
-        signer_phone: draftForm.signer_phone,
-        signer_national_id: draftForm.signer_national_id,
-        status: 'draft'
-      };
-
-      const res = await fetch('/api/contracts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const created = await res.json();
-      setShowDraftModal(false);
-      setDraftForm({
-        title: '',
-        amount: '',
-        role: 'employer',
-        category: 'DEV',
-        deadline: '7',
-        free_edits: '3',
-        commission_payer: 'freelancer',
-        description: '',
-        signer_fullname: 'علیرضا رضوانی',
-        signer_phone: '09121112233',
-        signer_national_id: '0012345678'
-      });
-      await fetchData();
-      setSelectedContract(created);
-      showToast(`✅ پیش‌نویس معامله با شناسه ${created.contract_id} در سامانه ذخیره شد.`);
-
-      addSimulatorMessage('bot', `📁 پیش‌نویس جدید **${created.title}** (شناسه: \`${created.contract_id}\`) ذخیره شد.\nمی‌توانید هر زمان از بخش «پیش‌نویس‌های من» آن را تکمیل و امضا کنید.`, [
-        [
-          { text: `🚀 تکمیل و امضا (${created.contract_id})`, action: `bot_resume_${created.contract_id}` },
-          { text: `🗑 حذف پیش‌نویس`, action: `bot_delete_${created.contract_id}` }
-        ]
-      ]);
-    } catch (err: any) {
-      alert('خطا در ذخیره پیش‌نویس: ' + err.message);
+  // Category Tag Helper
+  const getCategoryBadge = (cat: string) => {
+    switch (cat) {
+      case 'DEV': return { text: 'توسعه نرم‌افزار و ربات', color: 'bg-blue-100 text-blue-800 border-blue-200' };
+      case 'DS': return { text: 'طراحی گرافیک و UI/UX', color: 'bg-indigo-100 text-indigo-800 border-indigo-200' };
+      case 'CNT': return { text: 'محتوا و سئو', color: 'bg-emerald-100 text-emerald-800 border-emerald-200' };
+      case 'MKT': return { text: 'مارکتینگ و تبلیغات', color: 'bg-amber-100 text-amber-800 border-amber-200' };
+      default: return { text: 'معامله عمومی', color: 'bg-slate-100 text-slate-800 border-slate-200' };
     }
   };
 
-  // Delete Draft
-  const handleDeleteDraft = async (cid: string) => {
-    if (!confirm(`آیا از حذف پیش‌نویس ${cid} اطمینان دارید؟`)) return;
-    try {
-      await fetch(`/api/contracts/${cid}`, { method: 'DELETE' });
-      showToast(`🗑 پیش‌نویس ${cid} با موفقیت حذف گردید.`);
-      await fetchData();
-      if (selectedContract?.contract_id === cid) {
-        setSelectedContract(null);
-      }
-    } catch (err: any) {
-      alert('خطا در حذف پیش‌نویس: ' + err.message);
-    }
-  };
-
-  // Start Signing Flow
-  const openSignModal = (contract: Contract, role: 'employer' | 'freelancer') => {
-    setSignModalContract(contract);
-    setSignRole(role);
-    setSignerName(role === 'employer' ? (contract.buyer_fullname || 'علیرضا رضوانی') : (contract.seller_fullname || 'حسین سهرابی'));
-    setSignerPhone(role === 'employer' ? (contract.buyer_phone || '09121112233') : (contract.seller_phone || '09359998877'));
-    setSignerNid(role === 'employer' ? (contract.buyer_national_id || '0012345678') : (contract.seller_national_id || '0087654321'));
-    const genOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setOtpCode(genOtp);
-    setOtpInput(genOtp);
-    setSignStep('details');
-  };
-
-  // Execute Signature
-  const handleExecuteSign = async () => {
-    if (!signModalContract) return;
-    try {
-      const res = await fetch(`/api/contracts/${signModalContract.contract_id}/sign`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          role: signRole,
-          fullname: signerName,
-          phone: signerPhone,
-          national_id: signerNid,
-          otp: otpInput
-        })
-      });
-      const data = await res.json();
-      setSignModalContract(null);
-      await fetchData();
-      setSelectedContract(data.contract);
-
-      if (data.pdf_ready) {
-        showToast(`🎊 هر دو طرف معامله امضا کردند! سند رسمی PDF صادر شد و اکنون می‌توانید فیش واریزی را ارسال کنید.`);
-        addSimulatorMessage('bot', `🎊 **تبریک! قرارداد شماره \`${data.contract.contract_id}\` با موفقیت توسط هر دو طرف امضا شد.**\n📄 فایل PDF رسمی قرارداد امضا شده صادر شد:`, [
-          [
-            { text: '📸 ارسال فیش واریزی به امانت', action: `bot_send_receipt_${data.contract.contract_id}` }
-          ]
-        ], {
-          title: data.contract.title,
-          filename: `Miyanji_Contract_${data.contract.contract_id}.pdf`,
-          contractId: data.contract.contract_id
-        });
-      } else {
-        showToast(`✍️ امضای ${signRole === 'employer' ? 'کارفرما' : 'مجری'} با موفقیت ثبت شد. لینک دعوت برای طرف دیگر معامله صادر گردید.`);
-        addSimulatorMessage('bot', `✍️ امضای شما برای معامله \`${data.contract.contract_id}\` ثبت گردید.\n🔗 لینک دعوت طرف دوم:\n\`https://t.me/mianji_ir_bot?start=c_${data.contract.contract_id}\``);
-      }
-    } catch (err: any) {
-      alert('خطا در ثبت امضا: ' + err.message);
-    }
-  };
-
-  // Submit Receipt
-  const handleSubmitReceipt = async (cid: string) => {
-    try {
-      const receiptImg = receiptImage || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=400';
-      const res = await fetch(`/api/contracts/${cid}/receipt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ receipt_image: receiptImg })
-      });
-      const data = await res.json();
-      setReceiptModalContract(null);
-      setReceiptImage(null);
-      await fetchData();
-      setSelectedContract(data.contract);
-      showToast('✅ فیش واریزی با موفقیت دریافت و برای مدیریت ارسال گردید.');
-
-      // 1. Add user receipt message to Telegram Simulator
-      addSimulatorMessage('user', `[📷 ارسال تصویر فیش واریزی معامله ${cid}]`, undefined, undefined, receiptImg);
-
-      // 2. Bot confirmation message to user
-      addSimulatorMessage(
-        'bot',
-        `✅ **فیش واریزی معامله \`${cid}\` با موفقیت دریافت شد.**\n\n💰 **مبلغ واریزی:** ${data.contract.amount.toLocaleString('fa-IR')} تومان\n⏳ فیش جهت تطبیق حساب و تایید نهایی برای مدیریت ارسال گردید.\n💡 به محض تایید توسط مدیریت، معامله فعال شده و پیام اطلاع‌رسانی ارسال خواهد شد.`
-      );
-
-      // 3. Admin review card with approve and reject buttons
-      addSimulatorMessage(
-        'bot',
-        `🔔 **[پنل مدیریت] فیش واریزی جدید جهت بررسی و تایید:**\n📌 **معامله:** \`${cid}\`\n📝 **عنوان:** ${data.contract.title}\n💵 **مبلغ مورد انتظار:** ${data.contract.amount.toLocaleString('fa-IR')} تومان\n👤 **کارفرما:** ${data.contract.buyer_fullname || 'کارفرما'}\n🖼️ تصویر فیش واریزی ضمیمه گردید:`,
-        [
-          [
-            { text: '✅ تایید فیش و فعالسازی معامله', action: `admin_approve_receipt_${cid}`, style: 'success' },
-            { text: '❌ رد فیش واریزی', action: `admin_open_reject_${cid}`, style: 'danger' }
-          ]
-        ],
-        undefined,
-        receiptImg
-      );
-    } catch (err: any) {
-      showToast('❌ خطا در ارسال فیش: ' + (err.message || 'خطای نامشخص'));
-    }
-  };
-
-  // Admin Approve Receipt
-  const handleApproveReceipt = async (cid: string) => {
-    try {
-      const res = await fetch(`/api/contracts/${cid}/approve_receipt`, { method: 'POST' });
-      const data = await res.json();
-      await fetchData();
-      setSelectedContract(data.contract);
-      showToast('✅ فیش واریزی تایید شد و معامله با موفقیت فعال گردید.');
-      addSimulatorMessage(
-        'bot',
-        `🎉 **فیش واریزی معامله \`${cid}\` توسط مدیریت تایید گردید.**\n🔒 مبلغ **${data.contract.amount.toLocaleString('fa-IR')} تومان** در صندوق امن میانجی قفل شد.\n🚀 وضعیت پروژه به «🟢 در حال انجام» تغییر یافت و کار آغاز گردید.`
-      );
-    } catch (err: any) {
-      showToast('❌ خطا در تایید فیش: ' + (err.message || 'خطای نامشخص'));
-    }
-  };
-
-  // Admin Open Reject Modal
-  const handleOpenRejectModal = (cid: string) => {
-    const c = contracts.find(x => x.contract_id === cid);
-    setRejectModal({
-      cid,
-      title: c?.title || `معامله ${cid}`
-    });
-    setRejectReason('مغایرت در مبلغ واریزی با مفاد قرارداد');
-  };
-
-  // Admin Confirm Reject Receipt
-  const handleConfirmRejectReceipt = async (cid: string, reason: string) => {
-    try {
-      const res = await fetch(`/api/contracts/${cid}/reject_receipt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: reason || 'مغایرت مبلغ یا عدم واریز به حساب' })
-      });
-      const data = await res.json();
-      setRejectModal(null);
-      await fetchData();
-      setSelectedContract(data.contract);
-      showToast('❌ فیش واریزی توسط مدیریت رد شد.');
-      addSimulatorMessage(
-        'bot',
-        `⚠️ **فیش واریزی معامله \`${cid}\` توسط مدیریت رد شد.**\n🚫 **علت رد:** ${reason || 'مغایرت مبلغ یا ناخوانا بودن فیش'}\n💡 لطفاً پس از بررسی، تصویر فیش معتبر را مجدداً ارسال فرمایید:`,
-        [
-          [
-            { text: '📸 ارسال مجدد فیش واریزی', action: `bot_send_receipt_${cid}` }
-          ]
-        ]
-      );
-    } catch (err: any) {
-      showToast('❌ خطا در رد فیش: ' + (err.message || 'خطای نامشخص'));
-    }
-  };
-
-  // Escrow Deliver & Finalize
-  const handleDeliverProject = async (cid: string) => {
-    try {
-      const res = await fetch(`/api/contracts/${cid}/deliver`, { method: 'POST' });
-      const data = await res.json();
-      await fetchData();
-      setSelectedContract(data.contract);
-      showToast(`📦 خروجی‌های پروژه تحویل داده شد و در انتظار تایید کارفرما قرار گرفت.`);
-    } catch (err: any) {
-      alert('خطا در تحویل: ' + err.message);
-    }
-  };
-
-  const handleApproveWork = async (cid: string) => {
-    try {
-      const res = await fetch(`/api/contracts/${cid}/approve`, { method: 'POST' });
-      const data = await res.json();
-      await fetchData();
-      setSelectedContract(data.contract);
-      showToast(`🏁 کارفرما کار را تایید کرد. وجه امانت به حساب مجری تسویه شد.`);
-    } catch (err: any) {
-      alert('خطا در تایید کار: ' + err.message);
-    }
-  };
-
-  const handleDispute = async (cid: string) => {
-    const reason = prompt('لطفاً دلیل درخواست داوری و حل اختلاف را وارد کنید:');
-    if (!reason) return;
-    try {
-      const res = await fetch(`/api/contracts/${cid}/dispute`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      });
-      const data = await res.json();
-      await fetchData();
-      setSelectedContract(data.contract);
-      showToast(`⚖️ درخواست داوری ثبت شد و پرونده به دپارتمان حل اختلاف ارجاع گردید.`);
-    } catch (err: any) {
-      alert('خطا در ارجاع به داوری: ' + err.message);
-    }
-  };
-
-  // Simulator Message Dispatcher
-  const addSimulatorMessage = (
-    sender: 'bot' | 'user',
-    text: string,
-    inlineButtons?: Array<Array<{ text: string; action: string; style?: 'primary' | 'danger' | 'success' }>>,
-    document?: { title: string; filename: string; contractId: string },
-    photo?: string
-  ) => {
-    setChatMessages(prev => [
-      ...prev,
-      {
-        sender,
-        text,
-        inlineButtons,
-        document,
-        photo,
-        timestamp: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
-      }
-    ]);
-  };
-
-  const handleSimulatorSend = (userText: string) => {
-    if (!userText.trim()) return;
-    const txt = userText.trim();
-    setSimulatorInput('');
-    addSimulatorMessage('user', txt);
-
-    setTimeout(() => {
-      // 1. Cancel handling (Fixed bug reported by user: Never says draft saved unless genuinely in contract wizard with draft data!)
-      if (
-        txt === '🔙 انصراف و بازگشت' ||
-        txt === '❌ انصراف و بازگشت به منو' ||
-        txt === '❌ انصراف' ||
-        txt === 'انصراف' ||
-        txt === '/cancel' ||
-        txt === 'لغو'
-      ) {
-        const wasInDraftWizardWithData =
-          simulatorContext === 'contract_wizard' &&
-          (draftForm.title.trim().length > 0 || Number(draftForm.amount) > 0);
-
-        setSimulatorContext('idle');
-        setShowDraftModal(false);
-        setReceiptModalContract(null);
-        setSignModalContract(null);
-
-        if (wasInDraftWizardWithData) {
-          addSimulatorMessage(
-            'bot',
-            '📁 پیش‌نویس معامله در بخش «معاملات من > پیش‌نویس‌های من» ذخیره گردید و به منوی اصلی بازگشتید.',
-            [
-              [
-                { text: '📁 مشاهده پیش‌نویس‌های من', action: 'bot_cmd_drafts' },
-                { text: '➕ ایجاد پیش‌نویس جدید', action: 'bot_cmd_new_draft' }
-              ],
-              [
-                { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' },
-                { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
-              ]
-            ]
-          );
-        } else {
-          // If in wallet, deposit, deals, or empty draft:
-          addSimulatorMessage('bot', '❌ عملیات لغو شد و به منوی اصلی بازگشتید.', [
-            [
-              { text: '🤝 ثبت معامله جدید', action: 'bot_cmd_new_draft' },
-              { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' }
-            ],
-            [
-              { text: '📁 پیش‌نویس‌های من', action: 'bot_cmd_drafts' },
-              { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
-            ]
-          ]);
-        }
-        return;
-      }
-
-      // 2. Drafts command
-      if (txt === '📁 پیش‌نویس‌های من' || txt === 'پیش‌نویس‌ها' || txt.includes('پیش‌نویس')) {
-        setSimulatorContext('deals');
-        const userDrafts = contracts.filter(c => c.status === 'draft');
-        if (userDrafts.length === 0) {
-          addSimulatorMessage('bot', '📁 **پیش‌نویس‌های من**\n\nشما در حال حاضر هیچ پیش‌نویس ذخیره‌شده‌ای ندارید. جهت ایجاد یک پیش‌نویس جدید روی دکمه زیر کلیک کنید:', [
-            [
-              { text: '➕ ایجاد پیش‌نویس جدید', action: 'bot_cmd_new_draft' },
-              { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' }
-            ]
-          ]);
-        } else {
-          addSimulatorMessage('bot', `📁 **لیست پیش‌نویس‌های شما (${userDrafts.length} عدد):**\nبرای ادامه هر پیش‌نویس روی دکمه «🚀 تکمیل و امضا» کلیک کنید:`, [
-            ...userDrafts.map(d => [
-              { text: `🚀 تکمیل و امضا: ${d.title.substring(0, 22)}...`, action: `bot_resume_${d.contract_id}` },
-              { text: `🗑 حذف`, action: `bot_delete_${d.contract_id}`, style: 'danger' as const }
-            ]),
-            [{ text: '➕ ایجاد پیش‌نویس جدید دیگر', action: 'bot_cmd_new_draft' }]
-          ]);
-        }
-      } else if (txt === '🤝 ثبت معامله جدید' || txt === '➕ ثبت معامله جدید') {
-        setSimulatorContext('contract_wizard');
-        addSimulatorMessage('bot', '💼 **ایجاد پیش‌نویس قرارداد جدید**\n\n👤 لطفاً نقش خود را در این معامله مشخص کنید:', [
-          [
-            { text: '💼 کارفرما (خریدار)', action: 'bot_role_employer' },
-            { text: '🛠 مجری (پیمانکار)', action: 'bot_role_freelancer' }
-          ],
-          [
-            { text: '❌ انصراف و بازگشت به منو', action: 'bot_cmd_cancel' }
-          ]
-        ]);
-      } else if (txt === '💳 کیف پول و اعتبار') {
-        setSimulatorContext('wallet');
-        addSimulatorMessage('bot', `💳 **کیف پول و موجودی میانجی**\n\n💰 موجودی قابل برداشت: \`${walletBalance.toLocaleString('fa-IR')} تومان\`\n🔒 موجودی بلوکه‌شده در امانت: \`۰ تومان\`\n\nجهت شارژ حساب یا ثبت درخواست برداشت از گزینه‌های زیر استفاده کنید:`, [
-          [
-            { text: '➕ شارژ حساب با فیش واریزی', action: 'bot_wallet_deposit' },
-            { text: '➖ درخواست تسویه به شبا', action: 'bot_wallet_withdraw' }
-          ],
-          [
-            { text: '🔙 انصراف و بازگشت', action: 'bot_cmd_cancel' }
-          ]
-        ]);
-      } else if (txt === '📜 لیست معاملات من' || txt === '📜 معاملات من') {
-        setSimulatorContext('deals');
-        const draftsCount = contracts.filter(c => c.status === 'draft').length;
-        const activeCount = contracts.filter(c => c.status === 'active').length;
-        const pendingCount = contracts.filter(c => c.status === 'pending_party_b' || c.status === 'awaiting_payment' || c.status === 'awaiting_receipt_approval').length;
-        const completedCount = contracts.filter(c => c.status === 'completed').length;
-        addSimulatorMessage('bot', `📑 **پنل مدیریت هوشمند معاملات شما**\n\n📊 **آمار کلی:**\n• درحال انجام: \`${activeCount}\`\n• در انتظار اقدام: \`${pendingCount}\`\n• پیش‌نویس‌ها: \`${draftsCount}\`\n• تکمیل شده: \`${completedCount}\``, [
-          [
-            { text: `🟢 درحال انجام (${activeCount})`, action: 'bot_filter_active' },
-            { text: `⏳ در انتظار اقدام (${pendingCount})`, action: 'bot_filter_pending' }
-          ],
-          [
-            { text: `🏁 تکمیل شده (${completedCount})`, action: 'bot_filter_completed' },
-            { text: `📁 پیش‌نویس‌های من (${draftsCount})`, action: 'bot_cmd_drafts' }
-          ],
-          [
-            { text: '➕ ایجاد پیش‌نویس جدید', action: 'bot_cmd_new_draft' }
-          ]
-        ]);
-      } else if (txt === '/start' || txt === 'شروع') {
-        setSimulatorContext('idle');
-        addSimulatorMessage('bot', '👋 به سامانه هوشمند واسطه‌گری امن و ثبت رسمی قراردادهای میانجی خوش آمدید.\nجهت شروع یکی از گزینه‌های زیر را انتخاب نمایید:', [
-          [
-            { text: '🤝 ثبت معامله جدید', action: 'bot_cmd_new_draft' },
-            { text: '📁 پیش‌نویس‌های من', action: 'bot_cmd_drafts' }
-          ],
-          [
-            { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' },
-            { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
-          ]
-        ]);
-      } else {
-        addSimulatorMessage('bot', `درخواست دریافت شد: "${txt}".\nمی‌توانید از منوهای زیر جهت ساخت پیش‌نویس، بررسی معاملات، ارسال فیش یا امضای قرارداد استفاده فرمایید:`, [
-          [
-            { text: '🤝 ثبت معامله جدید', action: 'bot_cmd_new_draft' },
-            { text: '📁 پیش‌نویس‌های من', action: 'bot_cmd_drafts' }
-          ],
-          [
-            { text: '📜 لیست معاملات من', action: 'bot_cmd_my_deals' },
-            { text: '💳 کیف پول و اعتبار', action: 'bot_cmd_wallet' }
-          ]
-        ]);
-      }
-    }, 350);
-  };
-
-  const handleSimulatorAction = (action: string) => {
-    if (action === 'bot_cmd_new_draft') {
-      setSimulatorContext('contract_wizard');
-      setShowDraftModal(true);
-      addSimulatorMessage('bot', '📝 فرم ایجاد پیش‌نویس قرارداد جدید باز شد. مشخصات را وارد فرمایید تا در بخش پیش‌نویس‌ها ثبت گردد.');
-    } else if (action === 'bot_cmd_cancel') {
-      handleSimulatorSend('❌ انصراف');
-    } else if (action === 'bot_cmd_drafts') {
-      handleSimulatorSend('📁 پیش‌نویس‌های من');
-    } else if (action === 'bot_cmd_my_deals') {
-      handleSimulatorSend('📜 لیست معاملات من');
-    } else if (action === 'bot_cmd_wallet') {
-      handleSimulatorSend('💳 کیف پول و اعتبار');
-    } else if (action === 'bot_wallet_deposit') {
-      setSimulatorContext('deposit');
-      addSimulatorMessage('bot', '💳 **شارژ کیف پول میانجی با فیش بانکی**\n\nلطفاً مبلغ مورد نظر جهت شارژ را انتخاب فرمایید:', [
-        [
-          { text: '۵۰۰,۰۰۰ تومان', action: 'bot_dep_amt_500000' },
-          { text: '۱,۰۰۰,۰۰۰ تومان', action: 'bot_dep_amt_1000000' }
-        ],
-        [
-          { text: '۲,۰۰۰,۰۰۰ تومان', action: 'bot_dep_amt_2000000' },
-          { text: '۵,۰۰۰,۰۰۰ تومان', action: 'bot_dep_amt_5000000' }
-        ],
-        [
-          { text: '🔙 انصراف و بازگشت', action: 'bot_cmd_cancel' }
-        ]
-      ]);
-    } else if (action.startsWith('bot_dep_amt_')) {
-      const amtStr = action.replace('bot_dep_amt_', '');
-      const amt = Number(amtStr);
-      setSimulatorContext('deposit');
-      addSimulatorMessage('bot', `💳 **دستورالعمل واریز وجه جهت شارژ کیف پول**\n\n💰 مبلغ: **${amt.toLocaleString('fa-IR')} تومان**\n\nلطفاً مبلغ فوق را به شماره کارت زیر واریز کرده و تصویر فیش واریزی را ارسال نمایید:\n\n🏧 **شماره کارت:** \`6037-9975-7534-8211\`\n👤 **بنام:** امیررضا مجتبایی (حساب امانی میانجی)\n\nجهت ارسال فیش، روی دکمه زیر کلیک نمایید:`, [
-        [
-          { text: `📷 ارسال تصویر فیش واریزی (${amt.toLocaleString('fa-IR')} تومان)`, action: `bot_do_deposit_receipt_${amt}` }
-        ],
-        [
-          { text: '🔙 انصراف و بازگشت', action: 'bot_cmd_cancel' }
-        ]
-      ]);
-    } else if (action.startsWith('bot_do_deposit_receipt_')) {
-      const amt = Number(action.replace('bot_do_deposit_receipt_', ''));
-      const receiptImg = 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=400';
-      setSimulatorContext('idle');
-      addSimulatorMessage('user', `[📷 ارسال تصویر فیش شارژ به مبلغ ${amt.toLocaleString('fa-IR')} تومان]`, undefined, undefined, receiptImg);
-      addSimulatorMessage(
-        'bot',
-        `✅ **فیش واریزی شما دریافت شد.**\n\nفیش واریزی شارژ کیف پول به مبلغ **${amt.toLocaleString('fa-IR')} تومان** با موفقیت در سیستم ثبت گردید و در صف تایید مدیریت قرار گرفت.\n💡 پس از بررسی و تطبیق توسط ادمین، کیف پول شما به صورت آنی شارژ خواهد شد.`
-      );
-      addSimulatorMessage(
-        'bot',
-        `🏧 **[پنل مدیریت] درخواست شارژ کیف پول جدید:**\n💰 **مبلغ:** ${amt.toLocaleString('fa-IR')} تومان\n👤 **کاربر:** علیرضا رضوانی\n🖼️ تصویر فیش واریزی ضمیمه گردید:`,
-        [
-          [
-            { text: `✅ تایید شارژ (${amt.toLocaleString('fa-IR')} ت)`, action: `admin_approve_wallet_dep_${amt}`, style: 'success' },
-            { text: `❌ رد درخواست شارژ`, action: `admin_reject_wallet_dep_${amt}`, style: 'danger' }
-          ]
-        ],
-        undefined,
-        receiptImg
-      );
-    } else if (action.startsWith('admin_approve_wallet_dep_')) {
-      const amt = Number(action.replace('admin_approve_wallet_dep_', ''));
-      setWalletBalance(prev => prev + amt);
-      showToast(`✅ شارژ کیف پول به مبلغ ${amt.toLocaleString('fa-IR')} تومان تایید گردید.`);
-      addSimulatorMessage(
-        'bot',
-        `🎉 **درخواست شارژ توسط مدیریت تایید شد!**\nمبلغ **${amt.toLocaleString('fa-IR')} تومان** با موفقیت به موجودی کیف پول افزوده گردید.\n💰 موجودی جدید: **${(walletBalance + amt).toLocaleString('fa-IR')} تومان**`
-      );
-    } else if (action.startsWith('admin_reject_wallet_dep_')) {
-      showToast('❌ درخواست شارژ کیف پول رد شد.');
-      addSimulatorMessage(
-        'bot',
-        `⚠️ **درخواست شارژ کیف پول توسط مدیریت رد گردید.**\nعلت: مغایرت در واریز پایا یا ناخوانا بودن مشخصات فیش.\nلطفاً در صورت واریز وجه، تصویر واضح فیش را ارسال فرمایید.`
-      );
-    } else if (action.startsWith('bot_resume_')) {
-      const cid = action.replace('bot_resume_', '');
-      const c = contracts.find(x => x.contract_id === cid);
-      if (c) {
-        setSelectedContract(c);
-        openSignModal(c, 'employer');
-        addSimulatorMessage('bot', `🔄 پیش‌نویس \`${cid}\` بارگذاری شد. پنجره تایید مشخصات و امضای الکترونیک باز شد.`);
-      }
-    } else if (action.startsWith('bot_delete_')) {
-      const cid = action.replace('bot_delete_', '');
-      handleDeleteDraft(cid);
-    } else if (action.startsWith('bot_send_receipt_')) {
-      const cid = action.replace('bot_send_receipt_', '');
-      const c = contracts.find(x => x.contract_id === cid);
-      if (c) {
-        setReceiptModalContract(c);
-      }
-    } else if (action.startsWith('admin_approve_receipt_')) {
-      const cid = action.replace('admin_approve_receipt_', '');
-      handleApproveReceipt(cid);
-    } else if (action.startsWith('admin_open_reject_') || action.startsWith('admin_reject_receipt_')) {
-      const cid = action.replace('admin_open_reject_', '').replace('admin_reject_receipt_', '');
-      handleOpenRejectModal(cid);
-    } else if (action === 'bot_role_employer' || action === 'bot_role_freelancer') {
-      setShowDraftModal(true);
-      setDraftForm(prev => ({ ...prev, role: action === 'bot_role_employer' ? 'employer' : 'freelancer' }));
-    } else if (action === 'bot_filter_active') {
-      setFilterStatus('active');
-      showToast('فیلتر معاملات در حال انجام فعال شد.');
-    } else if (action === 'bot_filter_pending') {
-      setFilterStatus('pending');
-      showToast('فیلتر معاملات در انتظار اقدام فعال شد.');
-    } else if (action === 'bot_filter_completed') {
-      setFilterStatus('completed');
-      showToast('فیلتر معاملات تکمیل‌شده فعال شد.');
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
+  // Status Badge Helper
+  const getStatusBadge = (status: Contract['status']) => {
     switch (status) {
-      case 'draft':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20"><FileText className="w-3.5 h-3.5" /> پیش‌نویس</span>;
-      case 'pending_party_b':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20"><Clock className="w-3.5 h-3.5" /> در انتظار امضای طرف دوم</span>;
-      case 'awaiting_payment':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20"><CreditCard className="w-3.5 h-3.5" /> در انتظار ارسال فیش واریزی</span>;
-      case 'awaiting_receipt_approval':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"><Clock className="w-3.5 h-3.5" /> فیش ارسال شد - در انتظار تایید ادمین</span>;
       case 'active':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"><Lock className="w-3.5 h-3.5" /> فعال (مبلغ در امانت)</span>;
+        return { text: 'در حال انجام (وجه در اسکرو)', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: Lock };
       case 'work_submitted':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"><CheckCircle2 className="w-3.5 h-3.5" /> خروجی تحویل شد</span>;
+        return { text: 'خروجی کار تحویل شد (در انتظار تایید)', color: 'bg-sky-50 text-sky-700 border-sky-200', icon: Clock };
+      case 'awaiting_payment':
+        return { text: 'امضا شده - در انتظار تامین وجه', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: CreditCard };
+      case 'pending_party_b':
+        return { text: 'در انتظار تایید و امضای طرف دوم', color: 'bg-orange-50 text-orange-700 border-orange-200', icon: Users };
       case 'completed':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-500/10 text-green-400 border border-green-500/20"><FileCheck className="w-3.5 h-3.5" /> تکمیل و تسویه‌شده</span>;
+        return { text: 'تکمیل و تسویه شده', color: 'bg-blue-50 text-blue-700 border-blue-200', icon: CheckCircle2 };
       case 'in_dispute':
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20"><Scale className="w-3.5 h-3.5" /> درحال داوری</span>;
+        return { text: 'در جریان داوری حقوقی', color: 'bg-rose-50 text-rose-700 border-rose-200', icon: AlertTriangle };
+      case 'draft':
+        return { text: 'پیش‌نویس اولیه', color: 'bg-slate-100 text-slate-700 border-slate-200', icon: Edit3 };
+      case 'cancelled':
+        return { text: 'لغو شده (مسترد شده)', color: 'bg-slate-100 text-slate-500 border-slate-200', icon: X };
       default:
-        return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">{status}</span>;
+        return { text: 'نامشخص', color: 'bg-slate-100 text-slate-700 border-slate-200', icon: Info };
     }
   };
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/20 selection:text-cyan-300">
+  // ====================================================
+  // Render Main Content
+  // ====================================================
+
+  const renderContent = () => (
+    <div className="flex-1 pb-24">
       {/* Toast Notification */}
-      {notification && (
-        <div className="fixed bottom-6 left-6 z-50 max-w-md bg-slate-900 border border-cyan-500/40 text-cyan-200 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3">
-          <Sparkles className="w-5 h-5 text-cyan-400 shrink-0" />
-          <span className="text-sm font-medium">{notification}</span>
+      {toastMessage && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-slate-700 animate-in fade-in slide-in-from-top-4 duration-200 max-w-md w-full">
+          <Info className="w-5 h-5 text-blue-400 shrink-0" />
+          <p className="text-sm font-medium">{toastMessage}</p>
         </div>
       )}
 
-      {/* Top Navbar */}
-      <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center shadow-lg shadow-cyan-500/20 text-white font-black text-xl">
-              م
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-lg text-white tracking-tight">میانجی</span>
-                <span className="text-xs px-2 py-0.5 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono">
-                  Miyanji Escrow
-                </span>
+      {/* Main Tab Views */}
+      {activeTab === 'dashboard' && (
+        <div className="space-y-6">
+          {/* Hero Balance Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Total Available Balance */}
+            <div className="bg-gradient-to-br from-blue-700 via-blue-800 to-blue-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-10 -mt-10 pointer-events-none" />
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <span className="text-xs font-medium text-blue-200">موجودی آزاد کیف پول</span>
+                  <div className="text-2xl md:text-3xl font-bold mt-1">
+                    {(currentUser?.wallet_balance || 0).toLocaleString('fa-IR')}{' '}
+                    <span className="text-xs font-normal text-blue-200">تومان</span>
+                  </div>
+                </div>
+                <div className="p-2.5 bg-white/10 rounded-xl backdrop-blur-sm">
+                  <CreditCard className="w-6 h-6 text-white" />
+                </div>
               </div>
-              <p className="text-xs text-slate-400">سامانه امن ثبت قراردادهای الکترونیک و داوری مالی تلگرام</p>
+              <div className="flex gap-2 mt-4 pt-4 border-t border-white/10">
+                <button
+                  onClick={() => setShowDepositModal(true)}
+                  className="flex-1 bg-white text-blue-800 hover:bg-blue-50 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  شارژ کیف پول
+                </button>
+                <button
+                  onClick={() => setShowWithdrawModal(true)}
+                  className="flex-1 bg-blue-600/60 hover:bg-blue-600 text-white py-2 px-3 rounded-xl text-xs font-medium transition flex items-center justify-center gap-1.5"
+                >
+                  <ArrowRight className="w-4 h-4" />
+                  برداشت به شبا
+                </button>
+              </div>
+            </div>
+
+            {/* Escrow Locked Balance */}
+            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden">
+              <div className="flex justify-between items-start mb-3">
+                <div>
+                  <span className="text-xs font-medium text-slate-500">امانت امن در اسکرو (قفل شده)</span>
+                  <div className="text-2xl md:text-3xl font-bold text-slate-900 mt-1">
+                    {(currentUser?.escrow_locked_balance || 0).toLocaleString('fa-IR')}{' '}
+                    <span className="text-xs font-normal text-slate-500">تومان</span>
+                  </div>
+                </div>
+                <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-100">
+                  <Lock className="w-6 h-6 text-amber-600" />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 leading-relaxed mt-2">
+                وجه معاملات فعال در صندوق امانت میانجی تضمین شده و پس از تایید نهایی آزاد می‌گردد.
+              </p>
+              <div className="mt-4 flex items-center gap-2 text-xs text-blue-700 font-semibold cursor-pointer hover:underline" onClick={() => { setActiveTab('contracts'); setContractFilter('active'); }}>
+                مشاهده معاملات فعال در اسکرو
+                <ChevronRight className="w-4 h-4" />
+              </div>
+            </div>
+
+            {/* Active Contracts Summary */}
+            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+              <div className="flex justify-between items-start mb-3">
+                <div>
+                  <span className="text-xs font-medium text-slate-500">قراردادها و اعتبار کاربر</span>
+                  <div className="text-2xl md:text-3xl font-bold text-slate-900 mt-1">
+                    {contracts.length}{' '}
+                    <span className="text-xs font-normal text-slate-500">قرارداد ثبت‌شده</span>
+                  </div>
+                </div>
+                <div className="p-2.5 bg-blue-50 rounded-xl border border-blue-100">
+                  <ShieldCheck className="w-6 h-6 text-blue-700" />
+                </div>
+              </div>
+              <div className="space-y-2 mt-4 text-xs text-slate-600">
+                <div className="flex justify-between">
+                  <span>سطح احراز هویت (KYC):</span>
+                  <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md">سطح {currentUser?.kyc_level === 'gold' ? 'طلایی (کامل)' : 'نقره‌ای'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>نرخ کارمزد اسکرو:</span>
+                  <span className="font-bold text-blue-700">۱۰٪ بر عهده مجری/توافقی</span>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          {/* Quick Action Banner */}
+          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-700 text-white rounded-xl shrink-0">
+                <FileText className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm md:text-base">آغاز معامله امن جدید در میانجی</h3>
+                <p className="text-xs text-slate-600 mt-0.5">ثبت رسمی مشخصات، قفل امن مبلغ در اسکرو و صدور فوری سند PDF معتبر با امضای دیجیتال</p>
+              </div>
+            </div>
             <button
-              onClick={() => {
-                setSimulatorContext('wizard');
-                setShowDraftModal(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-medium text-sm shadow-lg shadow-cyan-500/25 hover:from-cyan-400 hover:to-blue-500 transition-all cursor-pointer"
+              onClick={() => setActiveTab('new_contract')}
+              className="w-full md:w-auto bg-blue-700 hover:bg-blue-800 text-white px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm flex items-center justify-center gap-2 transition shadow-sm"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>➕ ایجاد پیش‌نویس جدید</span>
+              ایجاد قرارداد جدید
             </button>
-
-            <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400 bg-slate-800/60 px-3 py-1.5 rounded-lg border border-slate-700/50">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>سرور فعال (پورت ۳۰۰۰)</span>
-            </div>
           </div>
-        </div>
 
-        {/* Navigation Tabs */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex overflow-x-auto gap-2 border-t border-slate-800/50 pt-1 pb-1">
-          <button
-            onClick={() => setActiveTab('contracts')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'contracts'
-                ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span>مدیریت قراردادها و پیش‌نویس‌ها</span>
-            {stats && stats.drafts > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full text-xs bg-amber-500/20 text-amber-400 font-mono">
-                {stats.drafts} پیش‌نویس
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('simulator')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'simulator'
-                ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
-            }`}
-          >
-            <Smartphone className="w-4 h-4" />
-            <span>شبیه‌ساز زنده ربات تلگرام</span>
-            <span className="px-1.5 py-0.5 rounded-full text-xs bg-emerald-500/20 text-emerald-400">زنده</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('pdf_view')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'pdf_view'
-                ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
-            }`}
-          >
-            <FileText className="w-4 h-4" />
-            <span>سند رسمی PDF قرارداد</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('arbitration')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'arbitration'
-                ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
-            }`}
-          >
-            <Scale className="w-4 h-4" />
-            <span>اتاق داوری و حل اختلاف</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('wallet')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'wallet'
-                ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
-            }`}
-          >
-            <CreditCard className="w-4 h-4" />
-            <span>کیف پول و کارمزد پلتفرم</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content Body */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
-        {/* TAB 1: Contracts & Drafts Management */}
-        {activeTab === 'contracts' && (
-          <div className="space-y-6">
-            {/* Quick Stats Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div
-                onClick={() => setFilterStatus('draft')}
-                className={`p-4 rounded-2xl bg-slate-900/80 border transition-all cursor-pointer ${
-                  filterStatus === 'draft' ? 'border-amber-500 shadow-lg shadow-amber-500/10' : 'border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between text-slate-400 mb-2">
-                  <span className="text-xs font-medium">پیش‌نویس‌های من</span>
-                  <FileText className="w-4 h-4 text-amber-400" />
-                </div>
-                <div className="text-2xl font-extrabold text-amber-400">{stats?.drafts ?? 0}</div>
-                <p className="text-xs text-slate-500 mt-1">آماده ویرایش، تکمیل و امضا</p>
-              </div>
-
-              <div
-                onClick={() => setFilterStatus('pending')}
-                className={`p-4 rounded-2xl bg-slate-900/80 border transition-all cursor-pointer ${
-                  filterStatus === 'pending' ? 'border-blue-500 shadow-lg shadow-blue-500/10' : 'border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between text-slate-400 mb-2">
-                  <span className="text-xs font-medium">در انتظار اقدام</span>
-                  <Clock className="w-4 h-4 text-blue-400" />
-                </div>
-                <div className="text-2xl font-extrabold text-blue-400">{stats?.pending ?? 0}</div>
-                <p className="text-xs text-slate-500 mt-1">امضای طرف دوم یا ارسال فیش</p>
-              </div>
-
-              <div
-                onClick={() => setFilterStatus('active')}
-                className={`p-4 rounded-2xl bg-slate-900/80 border transition-all cursor-pointer ${
-                  filterStatus === 'active' ? 'border-emerald-500 shadow-lg shadow-emerald-500/10' : 'border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between text-slate-400 mb-2">
-                  <span className="text-xs font-medium">قراردادهای جاری</span>
-                  <Lock className="w-4 h-4 text-emerald-400" />
-                </div>
-                <div className="text-2xl font-extrabold text-emerald-400">{stats?.active ?? 0}</div>
-                <p className="text-xs text-slate-500 mt-1">مبلغ در صندوق امانی قفل شده</p>
-              </div>
-
-              <div
-                onClick={() => setFilterStatus('completed')}
-                className={`p-4 rounded-2xl bg-slate-900/80 border transition-all cursor-pointer ${
-                  filterStatus === 'completed' ? 'border-green-500 shadow-lg shadow-green-500/10' : 'border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between text-slate-400 mb-2">
-                  <span className="text-xs font-medium">تکمیل و تسویه‌شده</span>
-                  <FileCheck className="w-4 h-4 text-green-400" />
-                </div>
-                <div className="text-2xl font-extrabold text-green-400">{stats?.completed ?? 0}</div>
-                <p className="text-xs text-slate-500 mt-1">تسویه امن با مجری و کسر کارمزد</p>
-              </div>
-            </div>
-
-            {/* Filter & Search Bar */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-900/50 p-3 rounded-2xl border border-slate-800">
-              <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
-                <button
-                  onClick={() => setFilterStatus('all')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                    filterStatus === 'all' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  همه معاملات ({contracts.length})
-                </button>
-                <button
-                  onClick={() => setFilterStatus('draft')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                    filterStatus === 'draft' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  📁 پیش‌نویس‌ها ({contracts.filter(c => c.status === 'draft').length})
-                </button>
-                <button
-                  onClick={() => setFilterStatus('pending')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                    filterStatus === 'pending' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  ⏳ در انتظار امضا/فیش
-                </button>
-                <button
-                  onClick={() => setFilterStatus('active')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                    filterStatus === 'active' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🟢 در حال انجام
-                </button>
-                <button
-                  onClick={() => setFilterStatus('completed')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                    filterStatus === 'completed' ? 'bg-green-500/20 text-green-300 border border-green-500/30' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🏁 تکمیل شده
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1 sm:w-64">
-                  <Search className="w-4 h-4 text-slate-500 absolute right-3 top-2.5" />
-                  <input
-                    type="text"
-                    placeholder="جست‌وجوی شناسه یا عنوان..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="w-full pl-3 pr-9 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
-                <button
-                  onClick={fetchData}
-                  title="تازه‌سازی"
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-                >
-                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                </button>
-              </div>
-            </div>
-
-            {/* Split View: List on Right, Detail on Left */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Deals List */}
-              <div className="lg:col-span-5 space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <h3 className="text-sm font-bold text-slate-300">
-                    {filterStatus === 'draft' ? '📁 لیست پیش‌نویس‌های شما' : 'لیست معاملات'}
-                  </h3>
-                  <button
-                    onClick={() => {
-                      setSimulatorContext('wizard');
-                      setShowDraftModal(true);
-                    }}
-                    className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-medium cursor-pointer"
-                  >
-                    <PlusCircle className="w-3.5 h-3.5" />
-                    <span>➕ ایجاد پیش‌نویس جدید</span>
-                  </button>
-                </div>
-
-                {filteredContracts.length === 0 ? (
-                  <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-slate-800/80 space-y-3">
-                    <FileText className="w-10 h-10 text-slate-600 mx-auto" />
-                    <p className="text-sm text-slate-400">هیچ معامله یا پیش‌نویسی در این بخش یافت نشد.</p>
-                    <button
-                      onClick={() => {
-                        setSimulatorContext('wizard');
-                        setShowDraftModal(true);
-                      }}
-                      className="px-4 py-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 text-xs font-medium transition-all cursor-pointer"
-                    >
-                      ➕ ایجاد اولین پیش‌نویس معامله
-                    </button>
-                  </div>
-                ) : (
-                  filteredContracts.map(c => {
-                    const isSelected = selectedContract?.contract_id === c.contract_id;
-                    return (
-                      <div
-                        key={c.contract_id}
-                        onClick={() => setSelectedContract(c)}
-                        className={`p-4 rounded-2xl border transition-all cursor-pointer space-y-3 ${
-                          isSelected
-                            ? 'bg-slate-900 border-cyan-500/60 shadow-lg shadow-cyan-500/10'
-                            : 'bg-slate-900/60 border-slate-800/80 hover:border-slate-700 hover:bg-slate-900'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <span className="text-xs font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
-                              {c.contract_id}
-                            </span>
-                            <h4 className="font-semibold text-sm text-slate-100 mt-1.5 leading-snug">
-                              {c.title}
-                            </h4>
-                          </div>
-                          {getStatusBadge(c.status)}
-                        </div>
-
-                        <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-800/60">
-                          <span className="font-bold text-slate-200">
-                            {c.amount > 0 ? `${c.amount.toLocaleString('fa-IR')} تومان` : 'مبلغ نامشخص'}
-                          </span>
-                          <span className="flex items-center gap-1 text-slate-400">
-                            <Clock className="w-3.5 h-3.5" />
-                            {c.deadline} روز کاری
-                          </span>
-                        </div>
-
-                        {c.status === 'draft' && (
-                          <div className="flex items-center gap-2 pt-1" onClick={e => e.stopPropagation()}>
-                            <button
-                              onClick={() => openSignModal(c, 'employer')}
-                              className="flex-1 py-1.5 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-medium flex items-center justify-center gap-1 transition-all cursor-pointer"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              <span>🚀 تکمیل و امضا</span>
-                            </button>
-                            <button
-                              onClick={() => handleDeleteDraft(c.contract_id)}
-                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs transition-all cursor-pointer"
-                              title="حذف پیش‌نویس"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* Deal Details Panel */}
-              <div className="lg:col-span-7">
-                {selectedContract ? (
-                  <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 sticky top-24">
-                    {/* Header */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
-                            {selectedContract.contract_id}
-                          </span>
-                          {getStatusBadge(selectedContract.status)}
-                        </div>
-                        <h2 className="text-lg font-bold text-white mt-2 leading-relaxed">
-                          {selectedContract.title}
-                        </h2>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <a
-                          href={`/api/contracts/${selectedContract.contract_id}/pdf`}
-                          download={`Miyanji_Contract_${selectedContract.contract_id}.pdf`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
-                        >
-                          <Download className="w-4 h-4" />
-                          <span>دانلود PDF رسمی</span>
-                        </a>
-                        <button
-                          type="button"
-                          onClick={() => setPdfPreviewModal(selectedContract)}
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-medium border border-slate-700 transition-all cursor-pointer"
-                        >
-                          <FileText className="w-4 h-4" />
-                          <span>مشاهده سند</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Financial & Terms Cards */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                        <span className="text-xs text-slate-500 block">مبلغ معامله</span>
-                        <span className="text-base font-bold text-cyan-400 mt-1 block">
-                          {selectedContract.amount.toLocaleString('fa-IR')} تومان
-                        </span>
-                        <span className="text-[11px] text-slate-500 mt-0.5 block">
-                          کارمزد: {(selectedContract.amount * 0.1).toLocaleString('fa-IR')} تومان
-                        </span>
-                      </div>
-
-                      <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                        <span className="text-xs text-slate-500 block">مهلت و ویرایش رایگان</span>
-                        <span className="text-base font-bold text-slate-200 mt-1 block">
-                          {selectedContract.deadline} روز کاری
-                        </span>
-                        <span className="text-[11px] text-emerald-400 mt-0.5 block">
-                          {selectedContract.free_edits} بار بازبینی رایگان
-                        </span>
-                      </div>
-
-                      <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                        <span className="text-xs text-slate-500 block">طرفین قرارداد</span>
-                        <span className="text-xs font-medium text-slate-200 mt-1 block truncate">
-                          کارفرما: {selectedContract.buyer_fullname || 'ثبت‌نشده'}
-                        </span>
-                        <span className="text-xs font-medium text-slate-400 mt-0.5 block truncate">
-                          مجری: {selectedContract.seller_fullname || 'در انتظار تایید'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Commitments & Description */}
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-semibold text-slate-400">شرح موضوع و تعهدات:</h4>
-                      <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/80 p-3.5 rounded-xl border border-slate-800/80">
-                        {selectedContract.description || 'توضیحی برای این معامله ثبت نشده است.'}
-                      </p>
-                    </div>
-
-                    {/* Escrow Process Action Bar */}
-                    <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-950 to-slate-900 border border-cyan-500/20 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-                          <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                          <span>عملیات و مدیریت چرخه اسکرو (Escrow Lifecycle)</span>
-                        </h4>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {/* If in Draft */}
-                        {selectedContract.status === 'draft' && (
-                          <>
-                            <button
-                              onClick={() => openSignModal(selectedContract, 'employer')}
-                              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 transition-all cursor-pointer"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                              <span>✍️ امضا توسط کارفرما با OTP</span>
-                            </button>
-                            <button
-                              onClick={() => handleDeleteDraft(selectedContract.contract_id)}
-                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700 transition-all cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                              <span>حذف پیش‌نویس</span>
-                            </button>
-                          </>
-                        )}
-
-                        {/* If pending Party B */}
-                        {selectedContract.status === 'pending_party_b' && (
-                          <div className="w-full space-y-2">
-                            <p className="text-xs text-blue-300">
-                              کارفرما امضا کرده است. اکنون مجری باید با کد تایید وارد شود و امضا نماید:
-                            </p>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => openSignModal(selectedContract, 'freelancer')}
-                                className="px-4 py-2 rounded-xl bg-blue-500 hover:bg-blue-400 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-blue-500/20 transition-all cursor-pointer"
-                              >
-                                <Edit3 className="w-4 h-4" />
-                                <span>✍️ امضای مجری با OTP (صدور آنی PDF)</span>
-                              </button>
-                              <button
-                                onClick={() => {
-                                  navigator.clipboard.writeText(`https://t.me/mianji_ir_bot?start=c_${selectedContract.contract_id}`);
-                                  showToast('🔗 لینک دعوت کپی شد.');
-                                }}
-                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1 border border-slate-700 cursor-pointer"
-                              >
-                                <Copy className="w-3.5 h-3.5" />
-                                <span>کپی لینک دعوت مجری</span>
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* If awaiting payment -> Show Upload Receipt button */}
-                        {selectedContract.status === 'awaiting_payment' && (
-                          <div className="w-full space-y-2">
-                            <p className="text-xs text-purple-300">
-                              قرارداد امضا شده است. کارفرما باید فیش واریز به شماره کارت میانجی را ارسال نماید:
-                            </p>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => setReceiptModalContract(selectedContract)}
-                                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/20 transition-all cursor-pointer"
-                              >
-                                <UploadCloud className="w-4 h-4" />
-                                <span>📸 ارسال فیش واریزی</span>
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* If awaiting receipt approval -> Show Admin Review buttons */}
-                        {selectedContract.status === 'awaiting_receipt_approval' && (
-                          <div className="w-full space-y-3 bg-yellow-950/30 p-3.5 rounded-xl border border-yellow-500/30">
-                            <div className="flex items-center gap-2 text-xs font-bold text-yellow-400">
-                              <Clock className="w-4 h-4" />
-                              <span>فیش واریزی ارسال شده و در انتظار تایید مدیریت است:</span>
-                            </div>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => handleApproveReceipt(selectedContract.contract_id)}
-                                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
-                              >
-                                <CheckCheck className="w-4 h-4" />
-                                <span>✅ تایید فیش و فعالسازی معامله</span>
-                              </button>
-                              <button
-                                onClick={() => handleOpenRejectModal(selectedContract.contract_id)}
-                                className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-rose-600/20 transition-all cursor-pointer"
-                              >
-                                <X className="w-4 h-4" />
-                                <span>❌ رد فیش واریزی</span>
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* If active */}
-                        {selectedContract.status === 'active' && (
-                          <>
-                            <button
-                              onClick={() => handleDeliverProject(selectedContract.contract_id)}
-                              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-600/20 transition-all cursor-pointer"
-                            >
-                              <Send className="w-4 h-4" />
-                              <span>📦 تحویل پروژه توسط مجری</span>
-                            </button>
-                            <button
-                              onClick={() => handleDispute(selectedContract.contract_id)}
-                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700 cursor-pointer"
-                            >
-                              <Scale className="w-4 h-4" />
-                              <span>درخواست داوری</span>
-                            </button>
-                          </>
-                        )}
-
-                        {/* If work submitted */}
-                        {selectedContract.status === 'work_submitted' && (
-                          <>
-                            <button
-                              onClick={() => handleApproveWork(selectedContract.contract_id)}
-                              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                              <span>✅ تایید کیفیت و آزادسازی وجه به مجری</span>
-                            </button>
-                            <button
-                              onClick={() => handleDispute(selectedContract.contract_id)}
-                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-400 text-xs font-medium border border-slate-700 cursor-pointer"
-                            >
-                              <Scale className="w-4 h-4" />
-                              <span>درخواست داوری</span>
-                            </button>
-                          </>
-                        )}
-
-                        {/* If completed */}
-                        {selectedContract.status === 'completed' && (
-                          <div className="flex items-center gap-2 text-xs text-emerald-400 font-semibold">
-                            <CheckCircle2 className="w-4 h-4" />
-                            <span>این قرارداد با موفقیت تسویه و پرونده آن بسته شده است.</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Timeline History */}
-                    <div className="space-y-3">
-                      <h4 className="text-xs font-bold text-slate-400">سیاهه وقایع و تاریخچه معامله (Audit Log):</h4>
-                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                        {selectedContract.history.map((h, i) => (
-                          <div key={i} className="flex items-start gap-2 text-xs text-slate-300 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60">
-                            <div className="w-2 h-2 rounded-full bg-cyan-400 mt-1 shrink-0" />
-                            <div className="flex-1">
-                              <p className="leading-snug">{h.event}</p>
-                              <span className="text-[10px] text-slate-500 block mt-0.5 font-mono">
-                                {new Date(h.timestamp).toLocaleTimeString('fa-IR')} - {new Date(h.timestamp).toLocaleDateString('fa-IR')}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-12 text-center rounded-3xl bg-slate-900/40 border border-slate-800/80">
-                    <p className="text-sm text-slate-400">یک معامله یا پیش‌نویس را از لیست انتخاب کنید تا جزئیات نمایش داده شود.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 2: Live Telegram Bot Simulator */}
-        {activeTab === 'simulator' && (
-          <div className="max-w-4xl mx-auto space-y-4">
-            <div className="p-4 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-xs text-cyan-300 flex items-center justify-between">
-              <span>🤖 **محیط تست زنده ربات تلگرام میانجی:** می‌توانید بخش پیش‌نویس‌ها، ارسال فیش، تایید مدیریت و دریافت آنی فایل PDF را در قالب تلگرام بیازمایید.</span>
-              <button
-                onClick={() => setChatMessages([chatMessages[0]])}
-                className="text-xs underline text-cyan-400 hover:text-cyan-200 cursor-pointer"
-              >
-                پاک‌سازی گفتگو
-              </button>
-            </div>
-
-            {/* Telegram App Container */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl overflow-hidden flex flex-col h-[650px]">
-              {/* Bot Header */}
-              <div className="bg-slate-800/90 px-4 py-3 border-b border-slate-700/80 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white font-bold shadow">
-                    م
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-sm text-white">میانجی | Miyanji Escrow Bot</h3>
-                    <p className="text-xs text-emerald-400 flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                      آنلاین (bot)
-                    </p>
-                  </div>
-                </div>
-
-                <span className="text-xs font-mono text-slate-400 bg-slate-950 px-2 py-1 rounded">
-                  @mianji_ir_bot
-                </span>
-              </div>
-
-              {/* Chat Scroll Area */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/60">
-                {chatMessages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] rounded-2xl p-4 text-xs sm:text-sm leading-relaxed shadow-md ${
-                        msg.sender === 'user'
-                          ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white rounded-br-xs'
-                          : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-bl-xs'
-                      }`}
-                    >
-                      <div className="whitespace-pre-line">{msg.text}</div>
-
-                      {/* Photo Attachment if present */}
-                      {msg.photo && (
-                        <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-700/60 max-w-xs shadow-md">
-                          <img src={msg.photo} alt="فیش واریزی" className="w-full h-44 object-cover" />
-                          <div className="px-2.5 py-1 bg-slate-950/90 flex items-center justify-between text-[11px] text-slate-400">
-                            <span>تصویر فیش واریزی بانکی</span>
-                            <span className="text-emerald-400 font-mono">JPG / PNG</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* PDF Document Attachment in Chat */}
-                      {msg.document && (
-                        <div className="mt-3 p-3 rounded-xl bg-slate-950/80 border border-cyan-500/30 flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <FileText className="w-8 h-8 text-cyan-400 shrink-0" />
-                            <div>
-                              <span className="font-bold text-xs text-white block truncate">{msg.document.filename}</span>
-                              <span className="text-[10px] text-cyan-300 block">سند رسمی قرارداد امضا شده</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <a
-                              href={`/api/contracts/${msg.document.contractId}/pdf`}
-                              download={`Miyanji_Contract_${msg.document.contractId}.pdf`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1 transition-all"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>دانلود PDF</span>
-                            </a>
-                            <button
-                              onClick={() => {
-                                const c = contracts.find(x => x.contract_id === msg.document!.contractId);
-                                if (c) {
-                                  setSelectedContract(c);
-                                  setPdfPreviewModal(c);
-                                }
-                              }}
-                              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-medium border border-slate-700"
-                            >
-                              مشاهده
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      <span className="text-[10px] text-slate-400 block text-left mt-1 font-mono">
-                        {msg.timestamp}
-                      </span>
-                    </div>
-
-                    {/* Inline Keyboard Buttons */}
-                    {msg.inlineButtons && (
-                      <div className="mt-2 space-y-1.5 w-full max-w-[85%]">
-                        {msg.inlineButtons.map((row, rIdx) => (
-                          <div key={rIdx} className="flex gap-2">
-                            {row.map((btn, bIdx) => (
-                              <button
-                                key={bIdx}
-                                onClick={() => handleSimulatorAction(btn.action)}
-                                className={`flex-1 py-2 px-3 rounded-xl border text-xs font-medium text-center transition-all cursor-pointer shadow-sm ${
-                                  btn.style === 'success'
-                                    ? 'bg-emerald-600/90 hover:bg-emerald-500 text-white border-emerald-500'
-                                    : btn.style === 'danger'
-                                    ? 'bg-rose-600/90 hover:bg-rose-500 text-white border-rose-500'
-                                    : 'bg-slate-800/90 hover:bg-cyan-900/40 text-cyan-300 hover:text-white border-slate-700/80'
-                                }`}
-                              >
-                                {btn.text}
-                              </button>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Bot Reply Keyboards */}
-              <div className="bg-slate-900 border-t border-slate-800 p-2 grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => handleSimulatorSend('🤝 ثبت معامله جدید')}
-                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold text-center border border-slate-700/60 cursor-pointer"
-                >
-                  🤝 ثبت معامله جدید
-                </button>
-                <button
-                  onClick={() => handleSimulatorSend('📁 پیش‌نویس‌های من')}
-                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-semibold text-center border border-slate-700/60 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>📁 پیش‌نویس‌های من</span>
-                </button>
-                <button
-                  onClick={() => handleSimulatorSend('📜 لیست معاملات من')}
-                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold text-center border border-slate-700/60 cursor-pointer"
-                >
-                  📜 لیست معاملات من
-                </button>
-                <button
-                  onClick={() => handleSimulatorSend('💳 کیف پول و اعتبار')}
-                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold text-center border border-slate-700/60 cursor-pointer"
-                >
-                  💳 کیف پول و اعتبار
-                </button>
-                <button
-                  onClick={() => handleSimulatorSend('❌ انصراف')}
-                  className="col-span-2 py-1.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white text-xs text-center border border-slate-800 cursor-pointer"
-                >
-                  ❌ انصراف و بازگشت به منو
-                </button>
-              </div>
-
-              {/* Input Bar */}
-              <form
-                onSubmit={e => {
-                  e.preventDefault();
-                  handleSimulatorSend(simulatorInput);
-                }}
-                className="bg-slate-950 p-3 border-t border-slate-800 flex items-center gap-2"
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    const target = contracts.find(c => c.status === 'awaiting_payment' || c.status === 'awaiting_receipt_approval') || selectedContract || contracts[0];
-                    if (target) {
-                      setReceiptModalContract(target);
-                    } else {
-                      showToast('معامله‌ای جهت ارسال فیش انتخاب نشده است.');
-                    }
-                  }}
-                  title="ارسال فیش واریزی معامله"
-                  className="px-3 py-2.5 rounded-xl bg-purple-950/80 hover:bg-purple-900/80 text-purple-300 border border-purple-800/50 transition-all flex items-center gap-1.5 cursor-pointer shrink-0 text-xs font-semibold"
-                >
-                  <UploadCloud className="w-4 h-4 text-purple-400" />
-                  <span className="hidden sm:inline">ارسال فیش</span>
-                </button>
-
-                <input
-                  type="text"
-                  placeholder="نوشتن پیام یا دستور (مانند /start یا پیش‌نویس یا انصراف)..."
-                  value={simulatorInput}
-                  onChange={e => setSimulatorInput(e.target.value)}
-                  className="flex-1 bg-slate-900 border border-slate-800 px-4 py-2.5 rounded-xl text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-                />
-                <button
-                  type="submit"
-                  className="p-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition-colors cursor-pointer"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 3: PDF Document Viewer */}
-        {activeTab === 'pdf_view' && (
-          <div className="max-w-4xl mx-auto space-y-6">
-            <div className="flex items-center justify-between bg-slate-900 p-4 rounded-2xl border border-slate-800">
+          {/* Recent Deals Table / List */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center">
               <div>
-                <h3 className="font-bold text-white text-base">سند رسمی قرارداد الکترونیک میانجی</h3>
-                <p className="text-xs text-slate-400">تولید شده با امضای الکترونیک، چک‌سام امنیتی و استانداردهای حقوقی ایران</p>
+                <h3 className="font-bold text-slate-900 text-base">معاملات و قراردادهای اخیر شما</h3>
+                <p className="text-xs text-slate-500 mt-0.5">وضعیت زنده، مراحل اسکرو و اقدامات سریع</p>
               </div>
-
-              {selectedContract && (
-                <button
-                  onClick={() => handleDownloadPdf(selectedContract.contract_id)}
-                  disabled={downloadingId === selectedContract.contract_id}
-                  className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 cursor-pointer disabled:opacity-50"
-                >
-                  {downloadingId === selectedContract.contract_id ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  <span>دانلود مستقیم فایل PDF</span>
-                </button>
-              )}
-            </div>
-
-            {selectedContract ? (
-              <div className="bg-slate-900 rounded-3xl border border-slate-800 p-8 space-y-6 shadow-xl">
-                {/* Visual Certificate Paper */}
-                <div className="bg-slate-950 border border-slate-800 p-6 sm:p-8 rounded-2xl space-y-6 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-2xl"></div>
-
-                  {/* Certificate Top Header */}
-                  <div className="flex flex-col sm:flex-row items-center justify-between border-b border-slate-800 pb-6 text-center sm:text-right gap-4">
-                    <div>
-                      <span className="text-xs text-cyan-400 font-mono">MIYANJI ESCROW OFFICIAL CERTIFICATE</span>
-                      <h2 className="text-xl font-extrabold text-white mt-1">سند قرارداد الکترونیک و داوری الزام‌آور</h2>
-                    </div>
-                    <div className="text-left sm:text-left">
-                      <span className="text-xs text-slate-400 block">شناسه بایگانی قرارداد:</span>
-                      <span className="text-sm font-mono font-bold text-cyan-400 bg-cyan-950/80 px-2.5 py-1 rounded border border-cyan-800/40">
-                        {selectedContract.contract_id}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Clauses */}
-                  <div className="space-y-4 text-xs sm:text-sm text-slate-300 leading-relaxed">
-                    <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/60">
-                      <h4 className="font-bold text-white mb-1.5">ماده ۱: موضوع و تعهدات قرارداد</h4>
-                      <p>{selectedContract.title}</p>
-                      <p className="mt-1 text-slate-400">{selectedContract.description}</p>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/60">
-                        <h4 className="font-bold text-white mb-1.5">ماده ۲: مبلغ و تضمین امانت (اسکرو)</h4>
-                        <p>مبلغ کل: <strong className="text-cyan-400">{selectedContract.amount.toLocaleString('fa-IR')} تومان</strong></p>
-                        <p className="text-slate-400 text-xs mt-1">مبلغ تا زمان اعلام رضایت کامل کارفرما نزد سامانه میانجی مسدود و تضمین می‌گردد.</p>
-                      </div>
-
-                      <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/60">
-                        <h4 className="font-bold text-white mb-1.5">ماده ۳: مدت زمان و بازبینی‌ها</h4>
-                        <p>مهلت تحویل: <strong>{selectedContract.deadline} روز کاری</strong></p>
-                        <p className="text-slate-400 text-xs mt-1">تعداد بازبینی رایگان: <strong>{selectedContract.free_edits} مرتبه</strong></p>
-                      </div>
-                    </div>
-
-                    <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/60">
-                      <h4 className="font-bold text-white mb-1.5">ماده ۴: داوری، حل اختلاف و فورس‌ماژور</h4>
-                      <p className="text-slate-400 text-xs leading-relaxed">
-                        هرگونه اختلاف در کیفیت، مغایرت یا تاخیر، توسط هیئت داوری سامانه میانجی بر اساس مستندات ثبت‌شده در تلگرام رسیدگی خواهد شد و رای صادره برای طرفین قطعی و لازم‌الاجراست.
-                      </p>
-                    </div>
-
-                    {/* Signatures Box */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-800">
-                      <div className="p-4 rounded-xl border border-slate-800 bg-slate-900 text-center space-y-2">
-                        <span className="text-xs text-slate-500 font-semibold block">امضای دیجیتال کارفرما</span>
-                        <span className="font-bold text-sm text-slate-200 block">{selectedContract.buyer_fullname || 'کارفرما'}</span>
-                        <span className="text-xs text-emerald-400 font-mono block">
-                          {selectedContract.buyer_signed_at ? '✅ تایید هویت و امضا با OTP' : '⏳ در انتظار امضا'}
-                        </span>
-                      </div>
-
-                      <div className="p-4 rounded-xl border border-slate-800 bg-slate-900 text-center space-y-2">
-                        <span className="text-xs text-slate-500 font-semibold block">امضای دیجیتال مجری</span>
-                        <span className="font-bold text-sm text-slate-200 block">{selectedContract.seller_fullname || 'مجری'}</span>
-                        <span className="text-xs text-emerald-400 font-mono block">
-                          {selectedContract.seller_signed_at ? '✅ تایید هویت و امضا با OTP' : '⏳ در انتظار امضا'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="p-12 text-center rounded-3xl bg-slate-900 border border-slate-800">
-                <p className="text-sm text-slate-400">قراردادی جهت نمایش انتخاب نشده است.</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 4: Arbitration & Disputes */}
-        {activeTab === 'arbitration' && (
-          <div className="max-w-4xl mx-auto space-y-6">
-            <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
-              <div className="flex items-center gap-3">
-                <Scale className="w-8 h-8 text-rose-400" />
-                <div>
-                  <h3 className="text-base font-bold text-white">دپارتمان داوری حقوقی و حل اختلاف اسکرو</h3>
-                  <p className="text-xs text-slate-400">بررسی بی‌طرفانه اسناد، فایل‌های ارسالی، زمان‌بندی و آزادسازی عادلانه وجوه</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
-                  <span className="text-xs text-slate-500">پرونده‌های فعال داوری</span>
-                  <span className="text-xl font-bold text-rose-400 mt-1 block">
-                    {contracts.filter(c => c.status === 'in_dispute').length}
-                  </span>
-                </div>
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
-                  <span className="text-xs text-slate-500">میانگین زمان حل اختلاف</span>
-                  <span className="text-xl font-bold text-cyan-400 mt-1 block">۲۴ ساعت</span>
-                </div>
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
-                  <span className="text-xs text-slate-500">کارمزد داوری</span>
-                  <span className="text-xl font-bold text-emerald-400 mt-1 block">رایگان (پوشش پلتفرم)</span>
-                </div>
-              </div>
-
-              {contracts.filter(c => c.status === 'in_dispute').length === 0 ? (
-                <div className="p-8 text-center rounded-2xl bg-slate-950/40 border border-slate-800/60 text-slate-400 text-xs">
-                  در حال حاضر هیچ پرونده اختلافی بازی ثبت نشده است. تمام معاملات در امنیت کامل در حال پیشرفت هستند.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {contracts.filter(c => c.status === 'in_dispute').map(c => (
-                    <div key={c.contract_id} className="p-4 rounded-2xl bg-slate-950 border border-rose-500/30 flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-mono text-rose-400">{c.contract_id}</span>
-                        <h4 className="font-bold text-sm text-white mt-1">{c.title}</h4>
-                        <p className="text-xs text-slate-400 mt-0.5">مبلغ درگیر: {c.amount.toLocaleString('fa-IR')} تومان</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleApproveWork(c.contract_id)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold cursor-pointer"
-                        >
-                          آزادسازی به مجری
-                        </button>
-                        <button
-                          onClick={() => alert(`مبلغ به حساب کارفرما مسترد گردید.`)}
-                          className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold cursor-pointer"
-                        >
-                          استرداد به کارفرما
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* TAB 5: Wallet & Commissions */}
-        {activeTab === 'wallet' && (
-          <div className="max-w-4xl mx-auto space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-2">
-                <span className="text-xs text-slate-400">موجودی صندوق امانت (Escrow Volume)</span>
-                <div className="text-2xl font-extrabold text-cyan-400">
-                  {(stats?.totalVolume ?? 0).toLocaleString('fa-IR')} تومان
-                </div>
-                <p className="text-xs text-emerald-400 flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5" /> ۱۰۰٪ تضمین‌شده و قفل در بانک
-                </p>
-              </div>
-
-              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-2">
-                <span className="text-xs text-slate-400">نرخ کارمزد پلتفرم</span>
-                <div className="text-2xl font-extrabold text-white">۱۰ درصد</div>
-                <p className="text-xs text-slate-500">کسر پس از تایید نهایی و تحویل پروژه</p>
-              </div>
-
-              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-2">
-                <span className="text-xs text-slate-400">سقف معاملات بدون احراز هویت</span>
-                <div className="text-2xl font-extrabold text-amber-400">۳,۰۰۰,۰۰۰ تومان</div>
-                <p className="text-xs text-slate-500">مبالغ بالاتر نیازمند ثبت کد ملی است</p>
-              </div>
-            </div>
-
-            {/* Commission Calculator */}
-            <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
-              <h3 className="font-bold text-white text-base">ماشین حساب کارمزد و تسویه میانجی</h3>
-              <p className="text-xs text-slate-400">مبلغ معامله خود را وارد کنید تا کارمزد و مبلغ دریافتی خالص مجری محاسبه شود:</p>
-
-              <div className="flex flex-col sm:flex-row gap-4">
-                <input
-                  type="number"
-                  placeholder="مبلغ به تومان (مثال: ۵۰۰۰۰۰۰)"
-                  className="flex-1 p-3 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-cyan-500"
-                  defaultValue="10000000"
-                  id="calc_amount"
-                  onChange={e => {
-                    const val = Number(e.target.value) || 0;
-                    const fee = val * 0.1;
-                    const net = val - fee;
-                    const feeEl = document.getElementById('calc_fee');
-                    const netEl = document.getElementById('calc_net');
-                    if (feeEl) feeEl.innerText = `${fee.toLocaleString('fa-IR')} تومان`;
-                    if (netEl) netEl.innerText = `${net.toLocaleString('fa-IR')} تومان`;
-                  }}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 pt-2">
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
-                  <span className="text-xs text-slate-500 block">کارمزد میانجی (۱۰٪):</span>
-                  <span id="calc_fee" className="text-base font-bold text-amber-400 mt-1 block">
-                    ۱,۰۰۰,۰۰۰ تومان
-                  </span>
-                </div>
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
-                  <span className="text-xs text-slate-500 block">مبلغ واریزی خالص به مجری:</span>
-                  <span id="calc_net" className="text-base font-bold text-emerald-400 mt-1 block">
-                    ۹,۰۰۰,۰۰۰ تومان
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Modal: Receipt Upload */}
-      {receiptModalContract && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <UploadCloud className="w-5 h-5 text-purple-400" />
-                <span>ارسال فیش واریزی به امانت</span>
-              </h3>
               <button
-                onClick={() => setReceiptModalContract(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+                onClick={() => setActiveTab('contracts')}
+                className="text-xs text-blue-700 font-bold hover:underline flex items-center gap-1"
               >
-                <X className="w-5 h-5" />
+                مشاهده همه
+                <ChevronRight className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="text-xs space-y-3">
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
-                <span className="text-slate-500 block">اطلاعات حساب واریز میانجی:</span>
-                <span className="font-mono text-cyan-400 font-bold block text-sm">6037-9975-7534-8211</span>
-                <span className="text-slate-300 block">بنام: امیررضا مجتبایی (حساب امانی سامانه)</span>
-                <div className="pt-2 border-t border-slate-800 mt-2 flex justify-between">
-                  <span className="text-slate-400">مبلغ واریزی:</span>
-                  <span className="font-bold text-cyan-400 text-sm">
-                    {receiptModalContract.amount.toLocaleString('fa-IR')} تومان
-                  </span>
-                </div>
-              </div>
+            <div className="divide-y divide-slate-100">
+              {contracts.slice(0, 4).map((c) => {
+                const badge = getStatusBadge(c.status);
+                const BadgeIcon = badge.icon;
+                const catInfo = getCategoryBadge(c.category);
 
-              <div className="p-4 rounded-xl border border-dashed border-slate-700 bg-slate-950 text-center space-y-2">
-                <UploadCloud className="w-8 h-8 text-slate-400 mx-auto" />
-                <p className="text-slate-300 font-semibold">تصویر فیش واریزی بانکی</p>
-                <p className="text-slate-500 text-[11px]">فرمت‌های JPG، PNG یا فایل PDF تاییدیه بانک</p>
-                <button
-                  type="button"
-                  onClick={() => setReceiptImage('https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=400')}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-medium cursor-pointer"
-                >
-                  {receiptImage ? '✅ تصویر فیش ضمیمه شد' : '📷 انتخاب یا شبیه‌سازی فیش'}
-                </button>
-              </div>
+                return (
+                  <div key={c.id} className="p-4 md:p-5 hover:bg-slate-50 transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div className="flex items-start gap-3.5">
+                      <div className={`p-2.5 rounded-xl border shrink-0 ${badge.color}`}>
+                        <BadgeIcon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900 text-sm">{c.title}</span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium border ${catInfo.color}`}>
+                            {catInfo.text}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-4 text-xs text-slate-500 mt-1 flex-wrap">
+                          <span>شناسه: <strong className="font-mono text-slate-700">{c.contract_id}</strong></span>
+                          <span>مبلغ: <strong className="text-blue-700 font-semibold">{c.amount.toLocaleString('fa-IR')} تومان</strong></span>
+                          <span>مهلت: {c.deadline} روز کاری</span>
+                        </div>
+                      </div>
+                    </div>
 
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setReceiptModalContract(null)}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
-                >
-                  انصراف
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSubmitReceipt(receiptModalContract.contract_id)}
-                  className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold shadow-lg shadow-purple-600/20 cursor-pointer"
-                >
-                  ارسال فیش جهت تایید ادمین
-                </button>
+                    <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+                      <span className={`text-xs px-3 py-1 rounded-full border font-medium ${badge.color}`}>
+                        {badge.text}
+                      </span>
+                      <button
+                        onClick={() => { setSelectedContract(c); setActiveTab('contracts'); }}
+                        className="p-2 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition"
+                        title="مشاهده جزییات"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Wallet Transaction History */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">گردش مالی و تراکنش‌های اخیر</h3>
+                <p className="text-xs text-slate-500 mt-0.5">واریز، برداشت و قفل وجه در صندوق امانت میانجی</p>
               </div>
+            </div>
+
+            <div className="divide-y divide-slate-100">
+              {transactions.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs">تراکنشی یافت نشد.</div>
+              ) : (
+                transactions.slice(0, 5).map((t) => (
+                  <div key={t.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2.5 rounded-xl ${
+                        t.type === 'deposit' || t.type === 'affiliate_reward' || t.type === 'escrow_release'
+                          ? 'bg-emerald-50 text-emerald-600'
+                          : 'bg-rose-50 text-rose-600'
+                      }`}>
+                        {t.type === 'deposit' ? <PlusCircle className="w-4 h-4" /> :
+                         t.type === 'withdraw' ? <ArrowRight className="w-4 h-4" /> :
+                         t.type === 'escrow_lock' ? <Lock className="w-4 h-4" /> :
+                         <TrendingUp className="w-4 h-4" />}
+                      </div>
+                      <div>
+                        <div className="text-xs md:text-sm font-semibold text-slate-800">{t.title}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">کد پیگیری: {t.ref_id}</div>
+                      </div>
+                    </div>
+                    <div className="text-left">
+                      <div className={`font-bold text-sm ${
+                        t.type === 'deposit' || t.type === 'affiliate_reward' || t.type === 'escrow_release'
+                          ? 'text-emerald-600'
+                          : 'text-slate-900'
+                      }`}>
+                        {t.type === 'deposit' || t.type === 'affiliate_reward' || t.type === 'escrow_release' ? '+' : '-'}
+                        {t.amount.toLocaleString('fa-IR')} <span className="text-[10px] text-slate-500 font-normal">تومان</span>
+                      </div>
+                      <span className="text-[10px] text-emerald-600 font-medium bg-emerald-50 px-2 py-0.5 rounded">موفق</span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal: New Draft Creation Wizard */}
-      {showDraftModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <PlusCircle className="w-5 h-5 text-cyan-400" />
-                <span>ایجاد پیش‌نویس قرارداد جدید</span>
-              </h3>
-              <button
-                onClick={() => {
-                  setSimulatorContext('idle');
-                  setShowDraftModal(false);
-                }}
-                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+      {/* Contracts Tab */}
+      {activeTab === 'contracts' && (
+        <div className="space-y-6">
+          {/* Header & Filter Controls */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">مدیریت قراردادهای اسکرو</h2>
+              <p className="text-xs text-slate-500 mt-1">مشاهده وضعیت امانت، اقدامات آزادسازی و دانلود نسخه PDF معتبر</p>
             </div>
-
-            <form onSubmit={handleSaveDraft} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">نقش شما در معامله:</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setDraftForm(p => ({ ...p, role: 'employer' }))}
-                    className={`py-2 px-3 rounded-xl border text-center transition-all cursor-pointer ${
-                      draftForm.role === 'employer'
-                        ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold'
-                        : 'border-slate-800 text-slate-400 hover:bg-slate-800'
-                    }`}
-                  >
-                    💼 کارفرما (خریدار)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDraftForm(p => ({ ...p, role: 'freelancer' }))}
-                    className={`py-2 px-3 rounded-xl border text-center transition-all cursor-pointer ${
-                      draftForm.role === 'freelancer'
-                        ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold'
-                        : 'border-slate-800 text-slate-400 hover:bg-slate-800'
-                    }`}
-                  >
-                    🛠 مجری (پیمانکار)
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">عنوان قرارداد / پروژه: *</label>
+            <div className="flex items-center gap-3">
+              <div className="relative flex-1 md:w-64">
+                <Search className="w-4 h-4 absolute right-3 top-3 text-slate-400" />
                 <input
                   type="text"
-                  required
-                  placeholder="مثال: توسعه وب‌سایت صرافی و بات تلگرام"
-                  value={draftForm.title}
-                  onChange={e => setDraftForm(p => ({ ...p, title: e.target.value }))}
-                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
+                  placeholder="جستجو بر اساس عنوان یا شناسه..."
+                  value={contractSearch}
+                  onChange={(e) => setContractSearch(e.target.value)}
+                  className="w-full pr-9 pl-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700"
                 />
               </div>
+              <button
+                onClick={() => setActiveTab('new_contract')}
+                className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+              >
+                <PlusCircle className="w-4 h-4" />
+                معامله جدید
+              </button>
+            </div>
+          </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">دسته‌بندی:</label>
-                  <select
-                    value={draftForm.category}
-                    onChange={e => setDraftForm(p => ({ ...p, category: e.target.value }))}
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="DEV">💻 برنامه‌نویسی و توسعه (DEV)</option>
-                    <option value="DS">🎨 طراحی و گرافیک (DS)</option>
-                    <option value="CNT">📝 محتوا و ترجمه (CNT)</option>
-                    <option value="CNS">🎓 مشاوره و آموزش (CNS)</option>
-                    <option value="TRD">🌐 خدمات تجاری و اکانت (TRD)</option>
-                    <option value="GEN">📦 سایر موارد (GEN)</option>
-                  </select>
-                </div>
+          {/* Filter Pills */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+            {[
+              { id: 'all', label: 'همه معاملات' },
+              { id: 'active', label: 'در حال انجام (اسکرو فعال)' },
+              { id: 'pending', label: 'در انتظار اقدام / پرداخت' },
+              { id: 'draft', label: 'پیش‌نویس‌ها' },
+              { id: 'completed', label: 'تسویه و تکمیل شده' },
+              { id: 'in_dispute', label: 'دارای اختلاف داوری' }
+            ].map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setContractFilter(f.id as any)}
+                className={`px-3.5 py-1.5 rounded-xl font-medium transition shrink-0 ${
+                  contractFilter === f.id
+                    ? 'bg-blue-700 text-white shadow-sm'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
 
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">مبلغ معامله (تومان):</label>
-                  <input
-                    type="number"
-                    placeholder="مثال: ۱۰۰۰۰۰۰۰"
-                    value={draftForm.amount}
-                    onChange={e => setDraftForm(p => ({ ...p, amount: e.target.value }))}
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
-              </div>
+          {/* Contracts Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {filteredContracts.map((c) => {
+              const badge = getStatusBadge(c.status);
+              const BadgeIcon = badge.icon;
+              const catInfo = getCategoryBadge(c.category);
+              const isBuyer = c.buyer_id === currentUser?.id || currentUser?.role === 'employer';
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">مهلت انجام (روز کاری):</label>
-                  <input
-                    type="number"
-                    value={draftForm.deadline}
-                    onChange={e => setDraftForm(p => ({ ...p, deadline: e.target.value }))}
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
+              return (
+                <div
+                  key={c.id}
+                  className={`bg-white rounded-2xl border transition shadow-sm p-5 space-y-4 ${
+                    selectedContract?.id === c.id ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-300'
+                  }`}
+                >
+                  {/* Top Meta */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className={`text-[10px] px-2.5 py-0.5 rounded-md font-semibold border ${catInfo.color}`}>
+                          {catInfo.text}
+                        </span>
+                        <span className="font-mono text-xs font-bold text-slate-500">#{c.contract_id}</span>
+                      </div>
+                      <h3 className="font-bold text-slate-900 text-sm leading-snug">{c.title}</h3>
+                    </div>
+                    <span className={`text-[11px] px-2.5 py-1 rounded-full border font-medium shrink-0 flex items-center gap-1 ${badge.color}`}>
+                      <BadgeIcon className="w-3.5 h-3.5" />
+                      {badge.text}
+                    </span>
+                  </div>
 
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">تعداد بازبینی رایگان:</label>
-                  <select
-                    value={draftForm.free_edits}
-                    onChange={e => setDraftForm(p => ({ ...p, free_edits: e.target.value }))}
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="0">بدون ویرایش رایگان</option>
-                    <option value="1">۱ مرتبه</option>
-                    <option value="2">۲ مرتبه</option>
-                    <option value="3">۳ مرتبه</option>
-                    <option value="5">۵ مرتبه</option>
-                  </select>
+                  {/* Lifecycle Visual Stepper */}
+                  <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                    <div className="text-[11px] font-bold text-slate-700 mb-2">مراحل امنیتی اسکرو میانجی:</div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 relative">
+                      <div className="flex flex-col items-center z-10">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[9px] mb-1 ${
+                          c.status !== 'draft' ? 'bg-blue-700 text-white' : 'bg-slate-300 text-slate-700'
+                        }`}>۱</div>
+                        <span>ثبت و امضا</span>
+                      </div>
+                      <div className="h-0.5 bg-slate-200 flex-1 mx-1" />
+                      <div className="flex flex-col items-center z-10">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[9px] mb-1 ${
+                          c.status === 'active' || c.status === 'work_submitted' || c.status === 'completed'
+                            ? 'bg-blue-700 text-white'
+                            : 'bg-slate-300 text-slate-700'
+                        }`}>۲</div>
+                        <span>قفل در اسکرو</span>
+                      </div>
+                      <div className="h-0.5 bg-slate-200 flex-1 mx-1" />
+                      <div className="flex flex-col items-center z-10">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[9px] mb-1 ${
+                          c.status === 'work_submitted' || c.status === 'completed'
+                            ? 'bg-blue-700 text-white'
+                            : 'bg-slate-300 text-slate-700'
+                        }`}>۳</div>
+                        <span>ارسال کار</span>
+                      </div>
+                      <div className="h-0.5 bg-slate-200 flex-1 mx-1" />
+                      <div className="flex flex-col items-center z-10">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[9px] mb-1 ${
+                          c.status === 'completed'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-300 text-slate-700'
+                        }`}>۴</div>
+                        <span>تسویه نهایی</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Financial & Parties Meta */}
+                  <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50/70 p-3 rounded-xl border border-slate-100">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">مبلغ کل معامله:</span>
+                      <strong className="text-blue-700 font-bold">{c.amount.toLocaleString('fa-IR')} تومان</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">مهلت تحویل:</span>
+                      <strong className="text-slate-800 font-semibold">{c.deadline} روز کاری</strong>
+                    </div>
+                    <div className="mt-1">
+                      <span className="text-slate-400 block text-[10px]">کارفرما (خریدار):</span>
+                      <span className="text-slate-700 font-medium">{c.buyer_fullname || 'ثبت‌نشده'}</span>
+                    </div>
+                    <div className="mt-1">
+                      <span className="text-slate-400 block text-[10px]">مجری (فروشنده):</span>
+                      <span className="text-slate-700 font-medium">{c.seller_fullname || 'ثبت‌نشده'}</span>
+                    </div>
+                  </div>
+
+                  {/* Description Snippet */}
+                  <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                    {c.description || 'تعهدات اجرایی طبق مفاد استاندارد اسکرو میانجی.'}
+                  </p>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                    {/* Pay into Escrow (If Awaiting Payment) */}
+                    {c.status === 'awaiting_payment' && (
+                      <button
+                        onClick={() => handleFundEscrow(c.contract_id)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        واریز به اسکرو و شروع پروژه
+                      </button>
+                    )}
+
+                    {/* Deliver Work (If Active) */}
+                    {c.status === 'active' && (
+                      <button
+                        onClick={() => setShowDeliverModal(c)}
+                        className="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        ارسال خروجی‌های کار
+                      </button>
+                    )}
+
+                    {/* Approve & Release Funds (If Work Submitted) */}
+                    {c.status === 'work_submitted' && (
+                      <button
+                        onClick={() => handleApproveRelease(c.contract_id)}
+                        className="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        تایید و آزادسازی وجه به مجری
+                      </button>
+                    )}
+
+                    {/* Download PDF Contract */}
+                    <button
+                      onClick={() => handleDownloadPdf(c.contract_id)}
+                      disabled={downloadingPdf === c.contract_id}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                    >
+                      <Download className="w-3.5 h-3.5 text-blue-700" />
+                      {downloadingPdf === c.contract_id ? 'در حال دانلود...' : 'دانلود PDF رسمی'}
+                    </button>
+
+                    {/* Dispute Option (If Active or Work Submitted) */}
+                    {(c.status === 'active' || c.status === 'work_submitted') && (
+                      <button
+                        onClick={() => setShowDisputeModal(c)}
+                        className="text-rose-600 hover:bg-rose-50 px-2.5 py-1.5 rounded-lg text-xs font-medium transition mr-auto flex items-center gap-1"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        ثبت اختلاف
+                      </button>
+                    )}
+
+                    {/* Cancel button if draft or pending */}
+                    {(c.status === 'draft' || c.status === 'pending_party_b') && (
+                      <button
+                        onClick={() => handleCancelContract(c.contract_id)}
+                        className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg transition mr-auto"
+                        title="لغو قرارداد"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* New Contract Wizard Tab */}
+      {activeTab === 'new_contract' && (
+        <div className="max-w-2xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+          <div className="border-b border-slate-100 pb-4">
+            <div className="flex items-center gap-2 text-blue-700 font-bold text-base mb-1">
+              <FileText className="w-5 h-5" />
+              فرم ثبت قرارداد و معامله امن اسکرو
+            </div>
+            <p className="text-xs text-slate-500">
+              اطلاعات معامله را تکمیل کنید. پس از ثبت، لینک تایید برای طرف مقابل ارسال می‌شود و وجه تا زمان رضایت در صندوق امن میانجی نگهداری خواهد شد.
+            </p>
+          </div>
+
+          <form onSubmit={handleCreateContract} className="space-y-4">
+            {/* Title */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">عنوان کامل قرارداد یا معامله *</label>
+              <input
+                type="text"
+                placeholder="مثال: طراحی وبسایت فروشگاهی با درگاه پرداخت و پنل ادمین"
+                value={newContractForm.title}
+                onChange={(e) => setNewContractForm({ ...newContractForm, title: e.target.value })}
+                className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white transition"
+                required
+              />
+            </div>
+
+            {/* Category & Deadline Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">دسته‌بندی موضوعی</label>
+                <select
+                  value={newContractForm.category}
+                  onChange={(e) => setNewContractForm({ ...newContractForm, category: e.target.value as any })}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white"
+                >
+                  <option value="DEV">توسعه نرم‌افزار، وب و ربات تلگرام</option>
+                  <option value="DS">طراحی هویت بصری و گرافیک</option>
+                  <option value="CNT">تولید محتوا، ترجمه و سئو</option>
+                  <option value="MKT">دیجیتال مارکتینگ و تبلیغات</option>
+                  <option value="GEN">معاملات عمومی و کالای دیجیتال</option>
+                </select>
               </div>
 
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">شرح تعهدات و الزامات تحویل پروژه:</label>
-                <textarea
-                  rows={3}
-                  placeholder="جزئیات تعهدات مجری، نحوه تحویل فایل‌ها و استاندارد کیفی..."
-                  value={draftForm.description}
-                  onChange={e => setDraftForm(p => ({ ...p, description: e.target.value }))}
-                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">مهلت تحویل (روز کاری) *</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="180"
+                  value={newContractForm.deadline}
+                  onChange={(e) => setNewContractForm({ ...newContractForm, deadline: e.target.value })}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Amount & Commission Payer */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">مبلغ کل قرارداد (تومان) *</label>
+                <input
+                  type="number"
+                  placeholder="مثال: 15000000"
+                  value={newContractForm.amount}
+                  onChange={(e) => setNewContractForm({ ...newContractForm, amount: e.target.value })}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white"
+                  required
+                />
+                {newContractForm.amount && (
+                  <span className="text-[11px] text-blue-700 font-semibold block mt-1">
+                    {Number(newContractForm.amount).toLocaleString('fa-IR')} تومان
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">پرداخت‌کننده کارمزد (۱۰٪)</label>
+                <select
+                  value={newContractForm.commission_payer}
+                  onChange={(e) => setNewContractForm({ ...newContractForm, commission_payer: e.target.value as any })}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white"
+                >
+                  <option value="freelancer">کسر از سهم مجری (پیش‌فرض)</option>
+                  <option value="employer">پرداخت توسط کارفرما</option>
+                  <option value="split">بالمناصفه (۵۰٪ کارفرما - ۵۰٪ مجری)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Counterparty info */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">نام یا شناسه طرف دوم</label>
+                <input
+                  type="text"
+                  placeholder="مثال: حسین سهرابی یا @hossein_dev"
+                  value={newContractForm.counterparty_name}
+                  onChange={(e) => setNewContractForm({ ...newContractForm, counterparty_name: e.target.value })}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white"
                 />
               </div>
 
-              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">شماره تماس طرف دوم (جهت پیامک)</label>
+                <input
+                  type="text"
+                  placeholder="0912..."
+                  value={newContractForm.counterparty_phone}
+                  onChange={(e) => setNewContractForm({ ...newContractForm, counterparty_phone: e.target.value })}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white"
+                />
+              </div>
+            </div>
+
+            {/* Scope of Work */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">شرح تعهدات و مشخصات دقیق تحویل پروژه *</label>
+              <textarea
+                rows={4}
+                placeholder="تعهدات مجری، موارد تحویلی، معیارهای پذیرش کارفرما و شرایط فسخ را با دقت بنویسید..."
+                value={newContractForm.description}
+                onChange={(e) => setNewContractForm({ ...newContractForm, description: e.target.value })}
+                className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white"
+                required
+              />
+            </div>
+
+            {/* Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setNewContractForm({ ...newContractForm, as_draft: true });
+                  setTimeout(() => {
+                    const fakeE = { preventDefault: () => {} } as any;
+                    handleCreateContract(fakeE);
+                  }, 50);
+                }}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
+              >
+                ذخیره به عنوان پیش‌نویس
+              </button>
+              <button
+                type="submit"
+                onClick={() => setNewContractForm({ ...newContractForm, as_draft: false })}
+                className="px-6 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition shadow-sm flex items-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                ثبت و ارسال دعوتنامه معامله
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* KYC Tab */}
+      {activeTab === 'kyc' && (
+        <div className="max-w-xl mx-auto space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+            <div className="flex items-center gap-3 border-b border-slate-100 pb-4 mb-5">
+              <div className="p-3 bg-blue-50 text-blue-700 rounded-xl">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900">سامانه احراز هویت هوشمند میانجی (KYC)</h2>
+                <p className="text-xs text-slate-500 mt-0.5">استعلام آنلاین سامانه شاهکار و تطابق کد ملی با شماره شبا</p>
+              </div>
+            </div>
+
+            {/* Status overview */}
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs text-slate-600 block">سطح فعلی حساب شما:</span>
+                  <strong className="text-sm font-bold text-blue-800">
+                    {currentUser?.kyc_level === 'gold' ? 'سطح طلایی (احراز هویت شده کامل)' : 'سطح پایه'}
+                  </strong>
+                </div>
+                <span className="px-3 py-1 bg-emerald-600 text-white rounded-full text-xs font-bold flex items-center gap-1 shadow-sm">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  فعال و معتبر
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleKycSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">کد ملی ۱۰ رقمی (تطابق با شماره موبایل ثبت‌نامی)</label>
+                <input
+                  type="text"
+                  maxLength={10}
+                  placeholder="مثال: 0012345678"
+                  value={kycNid}
+                  onChange={(e) => setKycNid(e.target.value)}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white font-mono"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">شماره شبای بانکی جهت واریز و تسویه (IBAN)</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    maxLength={26}
+                    placeholder="IR120120000000001234567890"
+                    value={kycSheba}
+                    onChange={(e) => setKycSheba(e.target.value.toUpperCase())}
+                    className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 focus:bg-white font-mono"
+                    required
+                  />
+                  <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+                </div>
+                <span className="text-[11px] text-slate-400 block mt-1">فرمت با حروف انگلیسی بزرگ: IR + ۲۴ رقم</span>
+              </div>
+
+              <div className="border border-dashed border-slate-300 rounded-xl p-5 text-center bg-slate-50/50">
+                <Paperclip className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                <div className="text-xs font-bold text-slate-700">بارگذاری تصویر کارت ملی یا کارت بانکی (اختیاری)</div>
+                <p className="text-[11px] text-slate-400 mt-1">جهت ارتقا به سقف نامحدود معاملات روزانه</p>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSimulatorContext('idle');
-                    setShowDraftModal(false);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
+                  onClick={() => showToast('فایل تصویر هویتی انتخاب شد.')}
+                  className="mt-3 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 text-xs font-medium rounded-lg hover:bg-slate-100 transition"
                 >
-                  انصراف
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold shadow-lg shadow-cyan-500/20 cursor-pointer"
-                >
-                  💾 ذخیره در پیش‌نویس‌ها
+                  انتخاب فایل از سیستم
                 </button>
               </div>
+
+              <button
+                type="submit"
+                disabled={kycSubmitting}
+                className="w-full py-3 bg-blue-700 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-2"
+              >
+                {kycSubmitting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    در حال استعلام از سامانه شاهکار...
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    استعلام و ارتقای سطح حساب کاربری
+                  </>
+                )}
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Modal: Sign with OTP Flow */}
-      {signModalContract && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Edit3 className="w-5 h-5 text-amber-400" />
-                <span>امضای الکترونیک قرارداد ({signRole === 'employer' ? 'کارفرما' : 'مجری'})</span>
-              </h3>
-              <button
-                onClick={() => setSignModalContract(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+      {/* Disputes Tab */}
+      {activeTab === 'disputes' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-rose-600 font-bold text-base">
+                <AlertTriangle className="w-5 h-5" />
+                مرکز داوری حقوقی و حل اختلاف میانجی
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                بررسی سه‌جانبه پرونده‌ها توسط وکلای متخصص و صدور رأی قطعی بر اساس اسناد و مدارک ثبت‌شده
+              </p>
+            </div>
+            {currentUser?.role === 'arbitrator' && (
+              <span className="bg-purple-100 text-purple-800 text-xs font-bold px-3 py-1.5 rounded-xl border border-purple-200">
+                حالت دسترسی داور ارشد فعال است
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Disputes List */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+              <h3 className="font-bold text-slate-900 text-xs px-1">پرونده‌های فعال و در جریان ({disputes.length})</h3>
+              <div className="space-y-2">
+                {disputes.map((d) => (
+                  <div
+                    key={d.id}
+                    onClick={() => setSelectedDispute(d)}
+                    className={`p-3.5 rounded-xl border cursor-pointer transition ${
+                      selectedDispute?.id === d.id
+                        ? 'border-blue-600 bg-blue-50/50'
+                        : 'border-slate-100 bg-slate-50 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="font-mono text-[11px] font-bold text-slate-600">{d.contract_id}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                        d.status === 'resolved' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                      }`}>
+                        {d.status === 'resolved' ? 'رأی صادر شد' : 'در دست بررسی داور'}
+                      </span>
+                    </div>
+                    <h4 className="text-xs font-bold text-slate-800 line-clamp-1">{d.contract_title}</h4>
+                    <p className="text-[11px] text-slate-500 mt-1 line-clamp-1">شاکی: {d.claimant_name}</p>
+                  </div>
+                ))}
+              </div>
             </div>
 
-            <div className="text-xs space-y-3">
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                <span className="text-slate-500 block">قرارداد:</span>
-                <span className="font-bold text-slate-200 block text-sm mt-0.5">{signModalContract.title}</span>
-                <span className="font-mono text-cyan-400 text-xs mt-0.5 block">شناسه: {signModalContract.contract_id}</span>
-              </div>
-
-              {signStep === 'details' ? (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-slate-400 mb-1">نام و نام خانوادگی امضاکننده:</label>
-                    <input
-                      type="text"
-                      value={signerName}
-                      onChange={e => setSignerName(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
-                    />
+            {/* Dispute Chat & Ruling Panel */}
+            <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[520px]">
+              {selectedDispute ? (
+                <>
+                  {/* Thread Header */}
+                  <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 rounded-t-2xl">
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-sm">{selectedDispute.contract_title}</h4>
+                      <p className="text-xs text-rose-600 mt-0.5 font-medium">علت اختلاف: {selectedDispute.reason}</p>
+                    </div>
+                    <span className="font-mono text-xs text-slate-500 font-bold">پرونده: #{selectedDispute.id}</span>
                   </div>
 
-                  <div>
-                    <label className="block text-slate-400 mb-1">شماره تلفن همراه:</label>
-                    <input
-                      type="text"
-                      value={signerPhone}
-                      onChange={e => setSignerPhone(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
-                    />
+                  {/* Messages Feed */}
+                  <div className="flex-1 p-4 overflow-y-auto space-y-3">
+                    {selectedDispute.messages.map((m) => {
+                      const isArb = m.sender_role === 'arbitrator';
+                      const isMe = m.sender_id === currentUser?.id;
+
+                      return (
+                        <div
+                          key={m.id}
+                          className={`flex flex-col max-w-[85%] ${
+                            isArb
+                              ? 'mx-auto w-full bg-purple-50 border border-purple-200 text-purple-950 p-3 rounded-2xl text-center'
+                              : isMe
+                              ? 'mr-auto bg-blue-700 text-white p-3 rounded-2xl rounded-br-none'
+                              : 'ml-auto bg-slate-100 text-slate-800 p-3 rounded-2xl rounded-bl-none'
+                          }`}
+                        >
+                          <div className={`text-[10px] mb-1 font-semibold ${
+                            isArb ? 'text-purple-700' : isMe ? 'text-blue-100' : 'text-slate-500'
+                          }`}>
+                            {m.sender_name} {isArb && '⚖️ (داور رسمی میانجی)'}
+                          </div>
+                          <p className="text-xs leading-relaxed">{m.text}</p>
+                        </div>
+                      );
+                    })}
+
+                    {selectedDispute.ruling && (
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 my-2 text-center">
+                        <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto mb-1" />
+                        <h5 className="font-bold text-emerald-900 text-xs">رأی نهایی داوری صادر گردید</h5>
+                        <p className="text-xs text-emerald-800 mt-1">{selectedDispute.ruling.comment}</p>
+                      </div>
+                    )}
                   </div>
 
-                  <div>
-                    <label className="block text-slate-400 mb-1">کد ملی ۱۰ رقمی:</label>
+                  {/* Arbitrator Actions (If Arbitrator) */}
+                  {currentUser?.role === 'arbitrator' && selectedDispute.status !== 'resolved' && (
+                    <div className="p-3 bg-purple-50 border-t border-purple-200 flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-purple-900">صدور رأی نهایی داوری:</span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleResolveDispute('refund_buyer')}
+                          className="bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-lg text-xs font-bold"
+                        >
+                          عودت کامل وجه به خریدار
+                        </button>
+                        <button
+                          onClick={() => handleResolveDispute('pay_seller')}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg text-xs font-bold"
+                        >
+                          تسویه کامل با مجری
+                        </button>
+                        <button
+                          onClick={() => handleResolveDispute('split_50_50')}
+                          className="bg-purple-700 hover:bg-purple-800 text-white px-2.5 py-1 rounded-lg text-xs font-bold"
+                        >
+                          تسهیم ۵۰-۵۰
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Message Input Box */}
+                  <div className="p-3 border-t border-slate-100 flex items-center gap-2">
                     <input
                       type="text"
-                      value={signerNid}
-                      onChange={e => setSignerNid(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-cyan-500"
+                      placeholder="متن پیام، دفاعیه یا توضیحات تکمیلی..."
+                      value={newDisputeMsg}
+                      onChange={(e) => setNewDisputeMsg(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSendDisputeMessage()}
+                      className="flex-1 text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700"
                     />
+                    <button
+                      onClick={handleSendDisputeMessage}
+                      className="bg-blue-700 hover:bg-blue-800 text-white p-2.5 rounded-xl transition"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setSignStep('otp')}
-                    className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold mt-2 cursor-pointer"
-                  >
-                    مرحله بعد: دریافت کد تایید OTP
-                  </button>
-                </div>
+                </>
               ) : (
-                <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-cyan-950/40 border border-cyan-800/50 text-center space-y-1">
-                    <span className="text-slate-400 text-xs">کد تأیید امنیتی پیامک شده (تستی):</span>
-                    <span className="text-2xl font-mono font-extrabold text-cyan-400 tracking-widest block">
-                      {otpCode}
-                    </span>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 mb-1">کد تایید ۶ رقمی را وارد کنید:</label>
-                    <input
-                      type="text"
-                      value={otpInput}
-                      onChange={e => setOtpInput(e.target.value)}
-                      className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-center font-mono text-lg font-bold text-white focus:outline-none focus:border-cyan-500 tracking-widest"
-                    />
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSignStep('details')}
-                      className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
-                    >
-                      ویرایش اطلاعات
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleExecuteSign}
-                      className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold shadow-lg shadow-emerald-500/20 cursor-pointer"
-                    >
-                      تایید نهایی و ثبت رسمی امضا
-                    </button>
-                  </div>
+                <div className="flex-1 flex flex-col items-center justify-center text-slate-400 p-8 text-center">
+                  <MessageSquare className="w-10 h-10 mb-2 text-slate-300" />
+                  <p className="text-xs">یک پرونده را از ستون راست جهت مشاهده جزییات و مکاتبات انتخاب فرمایید.</p>
                 </div>
               )}
             </div>
           </div>
         </div>
       )}
-      {/* Modal: Admin Reject Receipt with Reason */}
-      {rejectModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-base font-bold text-rose-400 flex items-center gap-2">
-                <X className="w-5 h-5 text-rose-500" />
-                <span>رد فیش واریزی معامله</span>
-              </h3>
+
+      {/* Affiliate Program Tab */}
+      {activeTab === 'affiliate' && affiliateStats && (
+        <div className="space-y-6 max-w-4xl mx-auto">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 rounded-2xl p-6 text-white shadow-md">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <span className="text-xs font-semibold text-blue-200 bg-white/10 px-3 py-1 rounded-full inline-block mb-2">
+                  سامانه رسمی سفیران میانجی (Affiliate)
+                </span>
+                <h2 className="text-xl md:text-2xl font-bold">درآمد مادام‌العمر از معاملات دوستان شما</h2>
+                <p className="text-xs text-blue-100 mt-1 max-w-xl leading-relaxed">
+                  با اشتراک‌گذاری لینک دعوت اختصاصی خود، ۱۰٪ از کارمزد دریافتی پلتفرم از هر معامله زیرمجموعه‌های خود را به صورت آنی دریافت کنید.
+                </p>
+              </div>
+              <div className="bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/15 text-center min-w-[160px]">
+                <span className="text-xs text-blue-200 block">سود قابل انتقال:</span>
+                <strong className="text-2xl font-bold block my-1">
+                  {affiliateStats.withdrawable_commission.toLocaleString('fa-IR')}
+                </strong>
+                <span className="text-[11px] text-blue-200 block mb-2">تومان</span>
+                <button
+                  onClick={handleClaimAffiliate}
+                  className="w-full bg-white text-blue-800 hover:bg-blue-50 py-1.5 px-3 rounded-lg text-xs font-bold transition shadow-sm"
+                >
+                  انتقال به کیف پول
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Stats Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
+              <Users className="w-5 h-5 text-blue-700 mx-auto mb-1.5" />
+              <div className="text-lg font-bold text-slate-900">{affiliateStats.total_invited} نفر</div>
+              <span className="text-xs text-slate-500">کاربران ثبت‌نامی</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
+              <TrendingUp className="w-5 h-5 text-emerald-600 mx-auto mb-1.5" />
+              <div className="text-lg font-bold text-slate-900">{affiliateStats.active_traders} نفر</div>
+              <span className="text-xs text-slate-500">معامله‌گران فعال</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
+              <DollarSign className="w-5 h-5 text-blue-700 mx-auto mb-1.5" />
+              <div className="text-lg font-bold text-slate-900">{affiliateStats.total_commission_earned.toLocaleString('fa-IR')}</div>
+              <span className="text-xs text-slate-500">کل سود پرداختی (تومان)</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
+              <Percent className="w-5 h-5 text-indigo-600 mx-auto mb-1.5" />
+              <div className="text-lg font-bold text-slate-900">۱۰ درصد</div>
+              <span className="text-xs text-slate-500">پورسانت پلتفرم</span>
+            </div>
+          </div>
+
+          {/* Link Box */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <h3 className="font-bold text-slate-900 text-sm">لینک و کد اختصاصی دعوت شما</h3>
+            <div className="flex flex-col md:flex-row gap-3">
+              <div className="flex-1 flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+                <span className="text-xs text-slate-700 font-mono truncate">{affiliateStats.referral_link}</span>
+              </div>
               <button
-                onClick={() => setRejectModal(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+                onClick={() => copyToClipboard(affiliateStats.referral_link, 'لینک دعوت')}
+                className="bg-blue-700 hover:bg-blue-800 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shrink-0"
               >
-                <X className="w-5 h-5" />
+                <Copy className="w-4 h-4" />
+                کپی لینک اختصاصی
+              </button>
+              <button
+                onClick={() => window.open(`https://t.me/share/url?url=${encodeURIComponent(affiliateStats.referral_link)}&text=${encodeURIComponent('واسطه‌گری امن و ثبت رسمی قراردادهای الکترونیک با میانجی اسکرو')}`)}
+                className="bg-sky-500 hover:bg-sky-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shrink-0"
+              >
+                <Share2 className="w-4 h-4" />
+                اشتراک در تلگرام
+              </button>
+            </div>
+          </div>
+
+          {/* Invited History Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-100 font-bold text-slate-900 text-xs">
+              لیست زیرمجموعه‌ها و معاملات مشمول پاداش
+            </div>
+            <div className="divide-y divide-slate-100 text-xs">
+              {affiliateStats.referral_history.map((r, i) => (
+                <div key={i} className="p-4 flex items-center justify-between hover:bg-slate-50 transition">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-xs">
+                      {r.user_name.slice(0, 1)}
+                    </div>
+                    <div>
+                      <div className="font-bold text-slate-800">{r.user_name}</div>
+                      <div className="text-[11px] text-slate-400">عضویت: {r.signed_up_at}</div>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <strong className="text-emerald-600 block">+{r.earned_amount.toLocaleString('fa-IR')} تومان</strong>
+                    <span className="text-[10px] text-slate-500">{r.contracts_count} معامله انجام داده</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className={`min-h-screen bg-[#F8FAFC] text-slate-900 ${viewMode === 'telegram' ? 'p-0 md:p-6 bg-slate-900' : ''}`}>
+      {/* Top Banner & Mode Switcher Bar */}
+      <div className="bg-slate-900 text-white py-2 px-4 text-xs">
+        <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="font-medium text-slate-300">سامانه واسطه‌گری امن و ثبت رسمی قراردادهای الکترونیک میانجی (Miyanji Escrow)</span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* View Mode Switcher */}
+            <div className="bg-slate-800 p-0.5 rounded-lg border border-slate-700 flex items-center text-[11px]">
+              <button
+                onClick={() => setViewMode('desktop')}
+                className={`px-2.5 py-1 rounded-md transition ${viewMode === 'desktop' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+              >
+                نمای وبسایت
+              </button>
+              <button
+                onClick={() => setViewMode('telegram')}
+                className={`px-2.5 py-1 rounded-md transition flex items-center gap-1 ${viewMode === 'telegram' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                نمای تلگرام مینی‌اپ
               </button>
             </div>
 
-            <div className="text-xs space-y-3">
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                <span className="text-slate-500 block">شناسه معامله:</span>
-                <span className="font-mono text-cyan-400 font-bold block">{rejectModal.cid}</span>
-                <span className="text-slate-300 block mt-1">{rejectModal.title}</span>
+            {/* Test User Switcher */}
+            <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
+              <span>تغییر نقش تستی:</span>
+              <button
+                onClick={() => handleSwitchUser(1802649782)}
+                className={`px-2 py-0.5 rounded ${currentUser?.id === 1802649782 ? 'bg-blue-600 text-white font-bold' : 'hover:text-white'}`}
+              >
+                کارفرما
+              </button>
+              <span>|</span>
+              <button
+                onClick={() => handleSwitchUser(290184712)}
+                className={`px-2 py-0.5 rounded ${currentUser?.id === 290184712 ? 'bg-blue-600 text-white font-bold' : 'hover:text-white'}`}
+              >
+                مجری
+              </button>
+              <span>|</span>
+              <button
+                onClick={() => handleSwitchUser(999000111)}
+                className={`px-2 py-0.5 rounded ${currentUser?.id === 999000111 ? 'bg-purple-600 text-white font-bold' : 'hover:text-white'}`}
+              >
+                داور
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Container Container (Standard Web or Telegram Mini App Frame) */}
+      <div className={viewMode === 'telegram' ? 'telegram-viewport my-0 md:my-6' : 'max-w-6xl mx-auto px-4 md:px-6'}>
+        {/* Telegram Header Mockup (If in Telegram View) */}
+        {viewMode === 'telegram' && (
+          <div className="bg-[#1D4ED8] text-white px-4 py-3 flex items-center justify-between text-xs font-semibold select-none">
+            <span className="flex items-center gap-1.5">
+              <Shield className="w-4 h-4" />
+              میانجی | Miyanji Mini App
+            </span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => showToast('منوی تلگرام')} className="hover:opacity-80">•••</button>
+              <button onClick={() => setViewMode('desktop')} className="hover:opacity-80 text-white/80">✕ بستن</button>
+            </div>
+          </div>
+        )}
+
+        {/* Brand App Header */}
+        <header className="bg-white border-b border-slate-200 py-3.5 px-4 md:px-6 sticky top-0 z-30 shadow-xs">
+          <div className="flex items-center justify-between gap-4">
+            {/* Logo */}
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('dashboard')}>
+              <div className="w-10 h-10 rounded-xl bg-blue-700 text-white flex items-center justify-center shadow-md shadow-blue-200">
+                <Shield className="w-6 h-6" />
+              </div>
+              <div>
+                <h1 className="font-bold text-slate-900 text-base md:text-lg tracking-tight">میانجی • Miyanji</h1>
+                <p className="text-[11px] text-slate-500">سامانه جامع اسکرو و واسطه‌گری امن معاملات</p>
+              </div>
+            </div>
+
+            {/* User Quick Info */}
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:flex flex-col text-left">
+                <span className="text-xs font-bold text-slate-800">{currentUser?.full_name}</span>
+                <span className="text-[10px] text-emerald-600 font-medium">احراز شده (سطح {currentUser?.kyc_level})</span>
+              </div>
+              <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center border border-blue-200 text-xs">
+                {currentUser?.full_name ? currentUser.full_name[0] : 'U'}
+              </div>
+            </div>
+          </div>
+
+          {/* Navigation Bar */}
+          <nav className="flex items-center gap-1 md:gap-2 mt-3 overflow-x-auto text-xs font-medium pb-1">
+            {[
+              { id: 'dashboard', label: 'داشبورد و کیف پول', icon: Layers },
+              { id: 'contracts', label: 'قراردادها و اسکرو', icon: FileText },
+              { id: 'new_contract', label: 'ثبت معامله جدید', icon: PlusCircle },
+              { id: 'kyc', label: 'احراز هویت', icon: ShieldCheck },
+              { id: 'disputes', label: 'مرکز داوری', icon: AlertTriangle },
+              { id: 'affiliate', label: 'سامانه سفیران', icon: Users }
+            ].map((tab) => {
+              const TabIcon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`px-3 py-2 rounded-xl flex items-center gap-1.5 transition shrink-0 ${
+                    isActive
+                      ? 'bg-blue-700 text-white font-bold shadow-sm shadow-blue-200'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  <TabIcon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </nav>
+        </header>
+
+        {/* Content Area */}
+        <main className="p-4 md:p-6">
+          {renderContent()}
+        </main>
+      </div>
+
+      {/* Deposit Modal */}
+      {showDepositModal && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-900 text-sm">شارژ کیف پول میانجی</h3>
+              <button onClick={() => setShowDepositModal(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">مبلغ شارژ (تومان)</label>
+                <input
+                  type="number"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 font-bold text-blue-700"
+                />
+                <div className="flex gap-2 mt-2">
+                  {['2000000', '5000000', '15000000'].map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setDepositAmount(p)}
+                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded text-[10px] text-slate-700 font-medium"
+                    >
+                      {Number(p).toLocaleString('fa-IR')}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>
-                <label className="block text-slate-300 font-semibold mb-2">علت رد فیش واریزی را انتخاب یا وارد کنید:</label>
-                <div className="space-y-2">
-                  {[
-                    'مغایرت در مبلغ واریزی با مفاد قرارداد',
-                    'تصویر فیش ناخوانا، تار یا ناقص است',
-                    'عدم واریز به حساب امانت میانجی (عدم تایید سامانه پایا/شاپرک)',
-                    'فیش واریزی تکراری یا منقضی شده است'
-                  ].map((preset, idx) => (
-                    <label
-                      key={idx}
-                      className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all ${
-                        rejectReason === preset
-                          ? 'bg-rose-950/40 border-rose-500/60 text-rose-300 font-medium'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="rejectReason"
-                        checked={rejectReason === preset}
-                        onChange={() => setRejectReason(preset)}
-                        className="text-rose-500"
-                      />
-                      <span>{preset}</span>
-                    </label>
-                  ))}
-                </div>
-
-                <div className="mt-3">
-                  <label className="block text-slate-400 mb-1">علت دلخواه یا توضیحات تکمیلی:</label>
-                  <input
-                    type="text"
-                    value={rejectReason}
-                    onChange={e => setRejectReason(e.target.value)}
-                    placeholder="علت رد فیش..."
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-rose-500 text-xs"
-                  />
+                <label className="block text-xs font-bold text-slate-700 mb-1">روش واریز</label>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <button
+                    onClick={() => setDepositMethod('gateway')}
+                    className={`p-3 rounded-xl border text-center font-bold transition ${
+                      depositMethod === 'gateway' ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    درگاه شاپرک (شتاب)
+                  </button>
+                  <button
+                    onClick={() => setDepositMethod('card_to_card')}
+                    className={`p-3 rounded-xl border text-center font-bold transition ${
+                      depositMethod === 'card_to_card' ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    کارت به کارت دستی
+                  </button>
                 </div>
               </div>
 
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setRejectModal(null)}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium cursor-pointer"
-                >
-                  انصراف
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleConfirmRejectReceipt(rejectModal.cid, rejectReason)}
-                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
-                >
-                  ثبت و رد قطعی فیش
-                </button>
-              </div>
+              <button
+                onClick={handleDeposit}
+                className="w-full py-3 bg-blue-700 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition shadow-sm mt-2"
+              >
+                تایید و اتصال به درگاه پرداخت
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal: Official PDF Certificate Preview & Direct Download */}
-      {pdfPreviewModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl my-8">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+      {/* Withdraw Modal */}
+      {showWithdrawModal && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-900 text-sm">درخواست تسویه و برداشت به شماره شبا</h3>
+              <button onClick={() => setShowWithdrawModal(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+
+            <div className="space-y-3">
               <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-cyan-400" />
-                  <span>سند رسمی قرارداد الکترونیک میانجی</span>
-                </h3>
-                <span className="text-xs text-slate-400 font-mono mt-0.5 block">
-                  شناسه قرارداد: {pdfPreviewModal.contract_id}
+                <label className="block text-xs font-bold text-slate-700 mb-1">مبلغ برداشت (تومان)</label>
+                <input
+                  type="number"
+                  placeholder="مبلغ مورد نظر به تومان"
+                  value={withdrawAmount}
+                  onChange={(e) => setWithdrawAmount(e.target.value)}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 font-bold text-slate-900"
+                />
+                <span className="text-[11px] text-slate-500 block mt-1">
+                  موجودی قابل برداشت: {(currentUser?.wallet_balance || 0).toLocaleString('fa-IR')} تومان
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <a
-                  href={`/api/contracts/${pdfPreviewModal.contract_id}/pdf`}
-                  download={`Miyanji_Contract_${pdfPreviewModal.contract_id}.pdf`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-500/20"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>دانلود فایل PDF</span>
-                </a>
-                <button
-                  onClick={() => window.print()}
-                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700 cursor-pointer"
-                  title="چاپ سند"
-                >
-                  🖨️
-                </button>
-                <button
-                  onClick={() => setPdfPreviewModal(null)}
-                  className="p-1.5 rounded-xl text-slate-400 hover:text-white cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
 
-            {/* Visual Certificate Paper */}
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5 text-xs text-slate-300">
-              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
-                <div>
-                  <span className="text-[10px] text-cyan-400 font-mono tracking-wider">MIYANJI ESCROW OFFICIAL CERTIFICATE</span>
-                  <h4 className="text-sm font-bold text-white mt-0.5">گواهی رسمی قرارداد الکترونیک و داوری الزام‌آور</h4>
-                </div>
-                <div className="text-left font-mono">
-                  <span className="text-[10px] text-slate-400 block">کد رهگیری:</span>
-                  <span className="text-xs font-bold text-cyan-300">{pdfPreviewModal.contract_id}</span>
-                </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">شماره شبای مقصد (IBAN)</label>
+                <input
+                  type="text"
+                  maxLength={26}
+                  placeholder="IR..."
+                  value={withdrawSheba}
+                  onChange={(e) => setWithdrawSheba(e.target.value.toUpperCase())}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 font-mono"
+                />
               </div>
 
-              {/* Subject */}
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-                <span className="text-slate-400 block text-[11px] mb-1">موضوع قرارداد:</span>
-                <span className="text-white font-bold text-sm block">{pdfPreviewModal.title}</span>
-                <p className="text-slate-400 mt-1.5 text-[11px] leading-relaxed">{pdfPreviewModal.description}</p>
-              </div>
-
-              {/* Financial & Terms */}
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                  <span className="text-slate-500 block text-[10px]">مبلغ قرارداد</span>
-                  <span className="text-cyan-400 font-bold text-xs mt-1 block">
-                    {pdfPreviewModal.amount.toLocaleString('fa-IR')} تومان
-                  </span>
-                  <span className="text-[9px] text-emerald-400">تضمین امانت اسکرو</span>
-                </div>
-                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                  <span className="text-slate-500 block text-[10px]">مهلت اجرا</span>
-                  <span className="text-white font-bold text-xs mt-1 block">
-                    {pdfPreviewModal.deadline} روز کاری
-                  </span>
-                  <span className="text-[9px] text-slate-400">از تاریخ شروع</span>
-                </div>
-                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                  <span className="text-slate-500 block text-[10px]">وضعیت حقوقی</span>
-                  <span className="text-emerald-400 font-bold text-xs mt-1 block">
-                    معتبر و لازم‌الاجرا
-                  </span>
-                  <span className="text-[9px] text-cyan-400">قانون تجارت الکترونیک</span>
-                </div>
-              </div>
-
-              {/* Parties */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-1">
-                  <span className="text-cyan-400 font-bold text-[11px] block">طرف اول (کارفرما / خریدار):</span>
-                  <span className="text-white font-semibold block">{pdfPreviewModal.buyer_fullname || 'کارفرما'}</span>
-                  <span className="text-slate-400 text-[10px] block font-mono">تلفن: {pdfPreviewModal.buyer_phone || 'ثبت شده'}</span>
-                  <span className="text-emerald-400 text-[10px] block font-medium">
-                    {pdfPreviewModal.buyer_signed_at ? '✅ امضا شده با کد یکبار مصرف OTP' : '⏳ در انتظار امضا'}
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-1">
-                  <span className="text-cyan-400 font-bold text-[11px] block">طرف دوم (مجری / پیمانکار):</span>
-                  <span className="text-white font-semibold block">{pdfPreviewModal.seller_fullname || (pdfPreviewModal.seller_signed_at ? 'مجری پروژه' : 'در انتظار تایید دعوت')}</span>
-                  <span className="text-slate-400 text-[10px] block font-mono">تلفن: {pdfPreviewModal.seller_phone || 'ثبت شده'}</span>
-                  <span className="text-emerald-400 text-[10px] block font-medium">
-                    {pdfPreviewModal.seller_signed_at ? '✅ امضا شده با کد یکبار مصرف OTP' : '⏳ در انتظار امضا'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Legal Hash & Seal */}
-              <div className="p-3 rounded-xl bg-slate-900/40 border border-cyan-900/30 flex items-center justify-between text-[10px]">
-                <div className="space-y-0.5">
-                  <span className="text-cyan-400 font-bold block">مهر دیجیتال و تاییدیه رسمی میانجی:</span>
-                  <span className="text-slate-400 font-mono block">SHA-256 Digest: e7f3a8b94091c8019a2b84fbc90d18e24fa68b92</span>
-                  <span className="text-emerald-400">مشمول ماده ۱۰ قانون مدنی و مواد ۶ الی ۱۲ قانون تجارت الکترونیک</span>
-                </div>
-                <div className="p-2 rounded-lg bg-cyan-950 border border-cyan-800/40 text-center text-cyan-300 font-bold">
-                  ✓ تایید شده
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
               <button
-                type="button"
-                onClick={() => setPdfPreviewModal(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
+                onClick={handleWithdraw}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-sm mt-2"
               >
-                بستن پنجره
+                ثبت درخواست تسویه در پایا
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deliver Modal */}
+      {showDeliverModal && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-900 text-sm">تحویل خروجی‌های معامله</h3>
+              <button onClick={() => setShowDeliverModal(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-slate-500">
+                پروژه: <strong>{showDeliverModal.title}</strong>
+              </p>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">توضیحات و گزارش کار انجام‌شده *</label>
+                <textarea
+                  rows={3}
+                  value={deliverNotes}
+                  onChange={(e) => setDeliverNotes(e.target.value)}
+                  placeholder="توضیح دهید چه کارهایی تحویل شده و فایل‌ها چگونه در دسترس هستند..."
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">لینک دانلود خروجی‌ها (گوگل‌درایو، گیت‌هاب و ...)</label>
+                <input
+                  type="url"
+                  value={deliverLink}
+                  onChange={(e) => setDeliverLink(e.target.value)}
+                  placeholder="https://..."
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700 font-mono"
+                />
+              </div>
+
+              <button
+                onClick={handleDeliverSubmit}
+                className="w-full py-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
+              >
+                ارسال به کارفرما جهت بررسی و تایید
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dispute Modal */}
+      {showDisputeModal && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-rose-600 text-sm flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4" />
+                درخواست رسیدگی داوری حقوقی
+              </h3>
+              <button onClick={() => setShowDisputeModal(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">دلیل اصلی ثبت اختلاف</label>
+                <select
+                  value={disputeReason}
+                  onChange={(e) => setDisputeReason(e.target.value)}
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700"
+                >
+                  <option value="تاخیر در تحویل و عدم پاسخگویی">تاخیر غیرمجاز در تحویل کار</option>
+                  <option value="عدم مطابقت کیفیت کار با بریف توافق‌شده">عدم انطباق خروجی‌ها با تعهدات قرارداد</option>
+                  <option value="درخواست ویرایش‌های نامتعارف خارج از قرارداد">درخواست تغییرات فراتر از مفاد قرارداد</option>
+                  <option value="سایر موارد و عدم توافق">سایر موارد اختلاف</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">شرح کامل اختلاف و ادعا</label>
+                <textarea
+                  rows={4}
+                  value={disputeDetails}
+                  onChange={(e) => setDisputeDetails(e.target.value)}
+                  placeholder="مستندات و توضیحات خود را برای بررسی داور بنویسید..."
+                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-700"
+                />
+              </div>
+
+              <button
+                onClick={handleSubmitDispute}
+                className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
+              >
+                ثبت پرونده و ارجاع فوری به داور
               </button>
             </div>
           </div>
