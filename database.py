@@ -722,17 +722,24 @@ def process_wallet_payment(user_id: int, contract_id: str) -> Tuple[bool, str]:
         if not res_wallet.data:
             return False, "❌ خطا در کسر از موجودی کیف پول."
 
-        # ۶. بروزرسانی وضعیت معامله به paid / in_escrow
+        # ۶. بروزرسانی وضعیت معامله به active (فعال و در جریان)
         now = datetime.now(timezone.utc)
         deadline_days = int(contract.get("deadline", 1))
         delivery_deadline = now + timedelta(days=deadline_days)
 
-        # طبق درخواست: وضعیت به paid تغییر می‌کند
         contract_updates = {
-            "status": "paid",
+            "status": "active",
             "paid_at": now.isoformat(),
             "delivery_deadline": delivery_deadline.isoformat()
         }
+        
+        # بروزرسانی حافظه موقت محلی
+        clean_cid = utils.normalize_deal_id(contract_id)
+        with db_lock:
+            if clean_cid in _in_memory_contracts:
+                _in_memory_contracts[clean_cid].update(contract_updates)
+            if contract_id in _in_memory_contracts:
+                _in_memory_contracts[contract_id].update(contract_updates)
         
         res_contract = supabase.table("contracts").update(contract_updates).eq("contract_id", contract_id).execute()
         
@@ -1325,28 +1332,38 @@ def get_contract(contract_id: str) -> Optional[Dict[str, Any]]:
         clean_id = utils.normalize_deal_id(raw_id)
         logger.info(f"🔍 [DB_GET_CONTRACT] Raw ID: '{raw_id}' | Normalized Clean ID: '{clean_id}'")
         
-        if clean_id in _in_memory_contracts:
-            return _enrich_contract(_in_memory_contracts[clean_id])
-        if raw_id in _in_memory_contracts:
-            return _enrich_contract(_in_memory_contracts[raw_id])
+        # اگر Supabase متصل است، ابتدا آخرین وضعیت را از دیتابیس دریافت و کش را به‌روزرسانی می‌کنیم
+        if supabase:
+            try:
+                res = supabase.table("contracts").select("*").eq("contract_id", clean_id).execute()
+                if res.data and len(res.data) > 0:
+                    contract = res.data[0]
+                    with db_lock:
+                        _in_memory_contracts[clean_id] = dict(contract)
+                        _in_memory_contracts[raw_id] = dict(contract)
+                    return _enrich_contract(contract)
+            except Exception as ex1:
+                logger.debug(f"Query contracts by contract_id failed: {ex1}")
+
+            try:
+                res_alt = supabase.table("contracts").select("*").eq("id", clean_id).execute()
+                if res_alt.data and len(res_alt.data) > 0:
+                    contract = res_alt.data[0]
+                    with db_lock:
+                        _in_memory_contracts[clean_id] = dict(contract)
+                        _in_memory_contracts[raw_id] = dict(contract)
+                    return _enrich_contract(contract)
+            except Exception as ex2:
+                logger.debug(f"Query contracts by id failed: {ex2}")
+
+        with db_lock:
+            if clean_id in _in_memory_contracts:
+                return _enrich_contract(_in_memory_contracts[clean_id])
+            if raw_id in _in_memory_contracts:
+                return _enrich_contract(_in_memory_contracts[raw_id])
 
         if not supabase:
             return None
-        
-        contract = None
-        try:
-            res = supabase.table("contracts").select("*").eq("contract_id", clean_id).execute()
-            if res.data:
-                contract = res.data[0]
-        except Exception as ex1:
-            logger.debug(f"Query contracts by contract_id failed: {ex1}")
-
-        if not contract:
-            try:
-                res_alt = supabase.table("contracts").select("*").eq("id", clean_id).execute()
-                contract = res_alt.data[0] if res_alt.data else None
-            except Exception as ex2:
-                logger.debug(f"Query contracts by id failed: {ex2}")
 
         if not contract:
             try:
@@ -1432,11 +1449,14 @@ def update_contract(
         payload = {"status": updates}
         if extra_data:
             payload.update(extra_data)
-
-    if not supabase:
-        clean_cid = utils.normalize_deal_id(contract_id)
+    clean_cid = utils.normalize_deal_id(contract_id)
+    with db_lock:
         if clean_cid in _in_memory_contracts:
             _in_memory_contracts[clean_cid].update(payload)
+        if contract_id in _in_memory_contracts:
+            _in_memory_contracts[contract_id].update(payload)
+
+    if not supabase:
         return True
 
     def _apply(pl: Dict[str, Any]) -> bool:
@@ -1485,22 +1505,7 @@ def get_user_contracts(user_id: int) -> List[Dict[str, Any]]:
     seen_ids = set()
     user_id_int = int(user_id)
 
-    # ۱. دریافت از حافظه موقت (همیشه و سریع)
-    with db_lock:
-        for cid, c in _in_memory_contracts.items():
-            uid_creator = c.get("creator_id") or c.get("created_by")
-            uid_buyer = c.get("buyer_id")
-            uid_seller = c.get("seller_id")
-            if (
-                (uid_creator and int(uid_creator) == user_id_int) or
-                (uid_buyer and int(uid_buyer) == user_id_int) or
-                (uid_seller and int(uid_seller) == user_id_int)
-            ):
-                if cid not in seen_ids:
-                    seen_ids.add(cid)
-                    contracts.append(dict(c))
-
-    # ۲. دریافت از دیتابیس Supabase
+    # ۱. دریافت از دیتابیس Supabase (در صورت اتصال) و همگام‌سازی کش
     if supabase:
         try:
             res_buyer = supabase.table("contracts").select("*").eq("buyer_id", user_id_int).execute()
@@ -1514,8 +1519,25 @@ def get_user_contracts(user_id: int) -> List[Dict[str, Any]]:
                 if cid and cid not in seen_ids:
                     seen_ids.add(cid)
                     contracts.append(c)
+                    with db_lock:
+                        _in_memory_contracts[cid] = dict(c)
         except Exception as e:
             logger.error(f"خطا در دریافت معاملات کاربر {user_id} از دیتابیس: {e}")
+
+    # ۲. دریافت از حافظه موقت (برای مواردی که هنوز در دیتابیس ثبت نشده‌اند)
+    with db_lock:
+        for cid, c in _in_memory_contracts.items():
+            uid_creator = c.get("creator_id") or c.get("created_by")
+            uid_buyer = c.get("buyer_id")
+            uid_seller = c.get("seller_id")
+            if (
+                (uid_creator and int(uid_creator) == user_id_int) or
+                (uid_buyer and int(uid_buyer) == user_id_int) or
+                (uid_seller and int(uid_seller) == user_id_int)
+            ):
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    contracts.append(dict(c))
 
     # ۳. دریافت پیش‌نویس‌های ثبت‌شده در user_states
     try:

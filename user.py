@@ -571,7 +571,7 @@ def register_user_handlers(bot: TeleBot):
                         bot.send_message(message.chat.id, "❌ فقط مجری معامله می‌تواند پروژه را تحویل دهد.")
                         return
                     
-                    if contract.get("status") not in ["in_progress", "active"]:
+                    if contract.get("status") not in ["in_progress", "active", "paid"] and not contract.get("paid_at"):
                         bot.send_message(message.chat.id, "⚠️ این معامله در وضعیت قابل تحویل نیست.")
                         return
 
@@ -1765,6 +1765,10 @@ def register_user_handlers(bot: TeleBot):
         p2_nid_text = f" \| کدملی: `{utils.escape_markdown(str(p2_nid))}`" if p2_nid else ""
         p2_signed = "✅ امضا شده" if (c.get("seller_signed_at") if creator_is_buyer else c.get("buyer_signed_at")) else "⏳ در انتظار امضا"
         
+        # اگر قرارداد پرداخت شده است ولی وضعیت هنوز awaiting_payment مانده، اصلاح خودکار
+        if c.get("paid_at") and status in ["awaiting_payment", "pending_payment", "pending_approval", "receipt_submitted", "awaiting_receipt_approval"]:
+            status = "active"
+
         # ترجمه وضعیت به فارسی (نقشه وضعیت‌ها)
         status_fa_map = {
             "draft": "📝 پیش‌نویس (در انتظار امضای ایجادکننده)",
@@ -1773,11 +1777,13 @@ def register_user_handlers(bot: TeleBot):
             "bargaining": "🔄 در حال چانه‌زنی",
             "active": "🟢 در حال اجرا",
             "in_progress": "🟢 در حال اجرا",
+            "paid": "🟢 در حال اجرا (پرداخت شده)",
             "delivered": "📦 تحویل شده - در انتظار تایید",
             "work_submitted": "📦 تحویل شده - در انتظار تایید",
             "completed": "✅ تکمیل شده",
             "cancelled": "❌ لغو شده",
             "disputed": "⚖️ در حال داوری",
+            "in_dispute": "⚖️ در حال داوری",
             "awaiting_payment": "💳 در انتظار پرداخت",
             "pending_payment": "💳 در انتظار پرداخت",
             "awaiting_receipt_approval": "⏳ در انتظار تایید فیش",
@@ -1883,18 +1889,20 @@ def register_user_handlers(bot: TeleBot):
         contracts = db.get_user_contracts(user_id)
 
         stats = _get_contracts_stats(contracts)
+        contracts_count = len(contracts)
         bot.send_message(
             message.chat.id,
             "📑 **پنل مدیریت هوشمند معاملات شما**\n"
             "──────────────────\n"
-            "برای مشاهده لیست، پیگیری وضعیت، پیش‌نویس‌ها و مدیریت قراردادها، لطفاً از دکمه‌های شیشه‌ای زیر استفاده کنید:\n\n"
+            f"شما دارای **{contracts_count}** معامله/پیش‌نویس در سامانه میانجی هستید.\n"
+            "جهت مشاهده و پیگیری وضعیت، روی دکمه شیشه‌ای معامله مورد نظر کلیک کنید:\n\n"
             f"📊 **آمار کلی:**\n"
             f"• درحال انجام: `{stats.get('active', 0)}`\n"
             f"• در انتظار اقدام: `{stats.get('pending', 0)}`\n"
             f"• پیش‌نویس‌ها: `{stats.get('drafts', 0)}`\n"
             f"• تکمیل شده: `{stats.get('completed', 0)}`",
             parse_mode="Markdown",
-            reply_markup=kb.get_contracts_categories_keyboard(stats)
+            reply_markup=kb.get_contracts_categories_keyboard(stats, contracts=contracts, user_id=user_id)
         )
 
     @bot.callback_query_handler(func=lambda call: call.data == "contracts_search")
@@ -2148,26 +2156,55 @@ def register_user_handlers(bot: TeleBot):
             reply_markup=_get_main_menu_for_user(user_id, is_admin)
         )
 
+    def _show_contract_details(chat_id: int, cid: str, user_id: int):
+        contract = db.get_contract(cid)
+        if contract:
+            render_contract_card(chat_id, user_id, contract)
+        else:
+            bot.send_message(chat_id, "❌ معامله یافت نشد.")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("view_deal_"))
+    def handle_view_deal(call: CallbackQuery):
+        cid = call.data.replace("view_deal_", "", 1)
+        user_id = call.from_user.id
+        contract = db.get_contract(cid)
+        if not contract:
+            bot.answer_callback_query(call.id, "❌ معامله یافت نشد.", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        if contract.get("status") == "draft":
+            text = (
+                f"📝 **پیش‌نویس معامله: {contract.get('title', 'بدون عنوان')}**\n"
+                f"📌 شناسه: `{cid}`\n"
+                f"💰 مبلغ: {utils.format_currency(contract.get('amount', 0))} تومان"
+            )
+            bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb.get_draft_management_keyboard(cid))
+        else:
+            render_contract_card(call.message.chat.id, user_id, contract)
+
     @bot.callback_query_handler(func=lambda call: call.data in ["back_to_contracts_menu", "my_contracts"])
     def handle_back_to_contracts_menu(call: CallbackQuery):
         user_id = call.from_user.id
         bot.answer_callback_query(call.id)
         contracts = db.get_user_contracts(user_id)
         stats = _get_contracts_stats(contracts)
+        contracts_count = len(contracts)
         text = (
             "📑 **پنل مدیریت هوشمند معاملات شما**\n"
             "──────────────────\n"
-            "برای مشاهده لیست، پیگیری وضعیت، پیش‌نویس‌ها و مدیریت قراردادها، لطفاً از دکمه‌های شیشه‌ای زیر استفاده کنید:\n\n"
+            f"شما دارای **{contracts_count}** معامله/پیش‌نویس در سامانه میانجی هستید.\n"
+            "جهت مشاهده و پیگیری وضعیت، روی دکمه شیشه‌ای معامله مورد نظر کلیک کنید:\n\n"
             f"📊 **آمار کلی:**\n"
             f"• درحال انجام: `{stats.get('active', 0)}`\n"
             f"• در انتظار اقدام: `{stats.get('pending', 0)}`\n"
             f"• پیش‌نویس‌ها: `{stats.get('drafts', 0)}`\n"
             f"• تکمیل شده: `{stats.get('completed', 0)}`"
         )
+        markup = kb.get_contracts_categories_keyboard(stats, contracts=contracts, user_id=user_id)
         try:
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=kb.get_contracts_categories_keyboard(stats))
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         except Exception:
-            bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb.get_contracts_categories_keyboard(stats))
+            bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("contracts_more:"))
     def handle_contracts_more(call: CallbackQuery):
@@ -2854,8 +2891,22 @@ def register_user_handlers(bot: TeleBot):
             db.update_contract(cid, updates)
             contract.update(updates)
 
+        # اگر قرارداد قبلاً پرداخت شده است، وضعیت به درستی فعال لحاظ گردد
+        if contract.get("paid_at") and contract.get("status") in ["awaiting_payment", "pending_payment", "pending_approval", "receipt_submitted", "awaiting_receipt_approval"]:
+            contract["status"] = "active"
+
         text = utils.generate_contract_text(contract)
         
+        action_markup = kb.get_contract_action_keyboard(
+            cid,
+            role,
+            contract.get("status", "draft"),
+            bool(contract.get("milestones")),
+            bool(contract.get("staged_payment")),
+            show_terms_button=False,
+            contract=contract
+        )
+
         # ویرایش پیام قبلی برای نمایش متن کامل و کیبورد اصلی ۴ دکمه‌ای
         try:
             bot.edit_message_text(
@@ -2863,28 +2914,14 @@ def register_user_handlers(bot: TeleBot):
                 message_id=call.message.message_id,
                 text=text,
                 parse_mode="Markdown",
-                reply_markup=kb.get_contract_action_keyboard(
-                    cid,
-                    role,
-                    contract.get("status", "draft"),
-                    bool(contract.get("milestones")),
-                    bool(contract.get("staged_payment")),
-                    show_terms_button=False
-                )
+                reply_markup=action_markup
             )
         except Exception:
             bot.send_message(
                 call.message.chat.id,
                 text,
                 parse_mode="Markdown",
-                reply_markup=kb.get_contract_action_keyboard(
-                    cid,
-                    role,
-                    contract.get("status", "draft"),
-                    bool(contract.get("milestones")),
-                    bool(contract.get("staged_payment")),
-                    show_terms_button=False
-                )
+                reply_markup=action_markup
             )
         
         bot.answer_callback_query(call.id)

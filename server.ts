@@ -866,25 +866,62 @@ app.post('/api/bot/simulate', (req: Request, res: Response) => {
     });
   }
 
-  if (input === '📜 لیست معاملات من' || input === '📜 معاملات من') {
-    const active = contracts.filter(c => c.status === 'active').length;
+  if (input === '📜 لیست معاملات من' || input === '📜 معاملات من' || input === 'معاملات من') {
+    const active = contracts.filter(c => c.status === 'active' || c.status === 'work_submitted').length;
     const pending = contracts.filter(c => c.status === 'pending_party_b' || c.status === 'awaiting_payment').length;
     const drafts = contracts.filter(c => c.status === 'draft').length;
     const completed = contracts.filter(c => c.status === 'completed').length;
 
+    // دکمه‌های شیشه‌ای برای هر معامله با عنوان و نام طرف مقابل
+    const contractButtons = contracts.slice(0, 8).map(c => {
+      const isBuyer = c.buyer_id === user_id || !c.seller_id;
+      const otherName = isBuyer ? (c.seller_fullname || 'مجری پروژه') : (c.buyer_fullname || 'کارفرما');
+      const icon = (c.status === 'active' || c.status === 'work_submitted') ? '🟢' : (c.status === 'completed' ? '🏁' : (c.status === 'draft' ? '📁' : '⏳'));
+      const shortTitle = c.title.length > 24 ? c.title.substring(0, 24) + '..' : c.title;
+      return [
+        {
+          text: `${icon} ${shortTitle} | 👤 ${otherName}`,
+          action: `view_deal_${c.contract_id}`,
+          style: 'primary' as const
+        }
+      ];
+    });
+
     return res.json({
-      reply: `📑 **پنل مدیریت هوشمند معاملات شما**\n\n📊 **آمار کلی:**\n• درحال انجام: ${active}\n• در انتظار اقدام: ${pending}\n• پیش‌نویس‌ها: ${drafts}\n• تکمیل شده: ${completed}`,
+      reply: `📑 **پنل مدیریت هوشمند معاملات شما**\n\nشما دارای ${contracts.length} معامله/پیش‌نویس در سامانه میانجی هستید.\nجهت مشاهده و پیگیری وضعیت، روی دکمه شیشه‌ای معامله کلیک کنید:\n\n📊 **آمار کلی:**\n• درحال انجام: ${active}\n• در انتظار اقدام: ${pending}\n• پیش‌نویس‌ها: ${drafts}\n• تکمیل شده: ${completed}`,
+      inline_buttons: [
+        ...contractButtons,
+        [
+          { text: `🟢 درحال انجام (${active})`, action: 'contracts_cat:active' },
+          { text: `⏳ در انتظار اقدام (${pending})`, action: 'contracts_cat:pending' }
+        ],
+        [
+          { text: `🏁 تکمیل شده (${completed})`, action: 'contracts_cat:completed' },
+          { text: `📁 پیش‌نویس‌های من (${drafts})`, action: 'bot_cmd_drafts' }
+        ],
+        [
+          { text: '➕ ایجاد پیش‌نویس جدید', action: 'bot_cmd_new_draft' }
+        ]
+      ]
+    });
+  }
+
+  if (input.startsWith('view_deal_')) {
+    const cid = input.replace('view_deal_', '');
+    const c = contracts.find(x => x.contract_id === cid || x.id === cid);
+    if (!c) {
+      return res.json({
+        reply: `❌ معامله با شناسه ${cid} یافت نشد.`,
+        keyboard: [['🤝 ثبت معامله جدید', '📜 لیست معاملات من']]
+      });
+    }
+    const statusFa = c.status === 'active' ? '🟢 در حال انجام پروژه توسط مجری' : (c.status === 'completed' ? '✅ تکمیل شده' : (c.status === 'draft' ? '📝 پیش‌نویس' : '⏳ در انتظار اقدام'));
+    return res.json({
+      reply: `🏛 **سند رسمی معامله میانجی**\n📑 شناسه: \`${c.contract_id}\`\n\n📌 **وضعیت:** ${statusFa}\n📌 **موضوع:** ${c.title}\n💰 **مبلغ کل:** ${c.amount.toLocaleString('fa-IR')} تومان\n⏱ **مهلت تحویل:** ${c.deadline} روز کاری\n📝 **تعهدات:** ${c.description || 'تعهدات استاندارد پلتفرم میانجی'}`,
       inline_buttons: [
         [
-          { text: `🟢 درحال انجام (${active})`, callback_data: 'contracts_cat:active' },
-          { text: `⏳ در انتظار اقدام (${pending})`, callback_data: 'contracts_cat:pending' }
-        ],
-        [
-          { text: `🏁 تکمیل شده (${completed})`, callback_data: 'contracts_cat:completed' },
-          { text: `📁 پیش‌نویس‌های من (${drafts})`, callback_data: 'contracts_cat:drafts' }
-        ],
-        [
-          { text: '➕ ایجاد پیش‌نویس جدید', callback_data: 'create_new_draft' }
+          { text: '📄 دانلود سند PDF رسمی', action: `pdf_preview_${c.contract_id}` },
+          { text: '🔙 بازگشت به لیست معاملات', action: '📜 لیست معاملات من' }
         ]
       ]
     });

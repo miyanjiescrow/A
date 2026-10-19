@@ -765,6 +765,11 @@ def generate_contract_text(contract: Dict[str, Any], buyer_user: Dict[str, Any] 
     milestones = contract.get("milestones", [])
     
     status = contract.get("status", "pending_approval")
+    paid_at = contract.get("paid_at")
+    # اگر قرارداد پرداخت شده است ولی وضعیت هنوز به درستی آپدیت نشده، وضعیت فعال لحاظ گردد
+    if paid_at and status in ["awaiting_payment", "pending_payment", "pending_approval", "receipt_submitted", "awaiting_receipt_approval"]:
+        status = "active"
+
     buyer_signed = bool(contract.get("buyer_signed_at") or contract.get("employer_signed_at"))
     seller_signed = bool(contract.get("seller_signed_at") or contract.get("freelancer_signed_at"))
     is_both_signed = buyer_signed and seller_signed
@@ -781,10 +786,12 @@ def generate_contract_text(contract: Dict[str, Any], buyer_user: Dict[str, Any] 
             status_badge = "⏳ در انتظار امضای مجری"
         else:
             status_badge = "💳 در انتظار واریز وجه توسط کارفرما"
-    elif status in ["awaiting_payment", "pending_payment", "receipt_submitted", "awaiting_receipt_approval"]:
+    elif status in ["awaiting_receipt_approval", "receipt_submitted"]:
+        status_badge = "⏳ در انتظار بررسی و تایید فیش واریزی توسط مدیریت"
+    elif status in ["awaiting_payment", "pending_payment"]:
         status_badge = "💳 در انتظار واریز وجه توسط کارفرما"
-    elif status in ["active", "in_progress"]:
-        status_badge = "🛠 در حال انجام پروژه توسط مجری"
+    elif status in ["active", "in_progress", "paid"]:
+        status_badge = "🛠 در حال انجام پروژه توسط مجری (وجه در امانت میانجی)"
     elif status in ["work_submitted", "delivered", "awaiting_edit_price"]:
         status_badge = "📦 فایل تحویل داده شد (در انتظار تأیید/ویرایش)"
     elif status == "in_dispute":
