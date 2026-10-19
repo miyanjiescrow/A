@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @font-face {
   font-family: 'Vazirmatn';
   src: url('/Font/Vazirmatn-Regular.ttf') format('truetype');
@@ -21,6 +23,15 @@
   --royal-blue-hover: #1E40AF;
   --royal-blue-light: #EFF6FF;
   --royal-blue-border: #BFDBFE;
+  color-scheme: light;
+}
+
+.dark {
+  --royal-blue: #2563EB;
+  --royal-blue-hover: #1D4ED8;
+  --royal-blue-light: #1E293B;
+  --royal-blue-border: #1E3A8A;
+  color-scheme: dark;
 }
 
 body {
@@ -31,6 +42,12 @@ body {
   background-color: #F8FAFC;
   color: #0F172A;
   -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+html.dark body {
+  background-color: #020617;
+  color: #F8FAFC;
 }
 
 /* Custom sleek scrollbar */
@@ -43,13 +60,25 @@ body {
   background: #F1F5F9;
 }
 
+.dark ::-webkit-scrollbar-track {
+  background: #0B1120;
+}
+
 ::-webkit-scrollbar-thumb {
   background: #CBD5E1;
   border-radius: 9999px;
 }
 
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
 ::-webkit-scrollbar-thumb:hover {
   background: #94A3B8;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }
 
 /* Telegram Mini App emulation container */
@@ -63,6 +92,12 @@ body {
   overflow: hidden;
   position: relative;
   background-color: #F8FAFC;
+  transition: background-color 0.25s ease;
+}
+
+.dark .telegram-viewport {
+  background-color: #0B1120;
+  box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 0 12px #0F172A, 0 0 0 14px #1E293B;
 }
 
 /* Pulse animation for live escrow badges */
