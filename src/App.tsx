@@ -38,7 +38,10 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
-  Percent
+  Percent,
+  Bell,
+  BellRing,
+  Volume2
 } from 'lucide-react';
 
 // ====================================================
@@ -154,11 +157,48 @@ interface AffiliateStats {
   }>;
 }
 
+export interface AppNotification {
+  id: string;
+  title: string;
+  body: string;
+  type: 'message' | 'status_change' | 'escrow' | 'arbitration';
+  contractId?: string;
+  timestamp: string;
+  read: boolean;
+}
+
 export default function App() {
   // Navigation & View Mode
   const [activeTab, setActiveTab] = useState<'dashboard' | 'contracts' | 'new_contract' | 'kyc' | 'disputes' | 'affiliate'>('dashboard');
   const [viewMode, setViewMode] = useState<'desktop' | 'telegram'>('desktop');
   const [isTelegramClient, setIsTelegramClient] = useState(false);
+
+  // Notification States
+  const [notifications, setNotifications] = useState<AppNotification[]>([
+    {
+      id: 'notif_1',
+      title: 'تغییر وضعیت معامله به فعال',
+      body: 'مبلغ ۶,۰۰۰,۰۰۰ تومان در اسکرو میانجی قفل شد و پروژه CNT-912-304 فعال گردید.',
+      type: 'status_change',
+      contractId: 'CNT-912-304',
+      timestamp: '۱۰ دقیقه پیش',
+      read: false
+    },
+    {
+      id: 'notif_2',
+      title: 'پیام جدید در پرونده داوری',
+      body: 'داور حقوقی میانجی: مدارک تکمیلی شما بررسی شد و به زودی رأی صادر می‌گردد.',
+      type: 'message',
+      contractId: 'DS-419-702',
+      timestamp: '۳۵ دقیقه پیش',
+      read: false
+    }
+  ]);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  const [browserPerm, setBrowserPerm] = useState<NotificationPermission>(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'default'
+  );
+  const [bannerNotif, setBannerNotif] = useState<AppNotification | null>(null);
 
   // User & Data States
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -219,6 +259,161 @@ export default function App() {
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  // Play gentle melodic notification chime via Web Audio API
+  const playNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      // Harmonic 2-tone melodic chime
+      osc.frequency.setValueAtTime(698.46, ctx.currentTime); // F5
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12); // A5
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch (e) {
+      // Audio context might be restricted before interaction
+    }
+  };
+
+  // Trigger Notification (Both In-App Banner & Native Browser Notification)
+  const triggerNotification = (
+    title: string,
+    body: string,
+    type: AppNotification['type'] = 'status_change',
+    contractId?: string
+  ) => {
+    const newNotif: AppNotification = {
+      id: `notif_${Date.now()}`,
+      title,
+      body,
+      type,
+      contractId,
+      timestamp: 'هم‌اکنون',
+      read: false
+    };
+
+    // 1. Play audio chime
+    playNotificationSound();
+
+    // 2. Add to in-app notification store
+    setNotifications(prev => [newNotif, ...prev]);
+
+    // 3. Display floating banner
+    setBannerNotif(newNotif);
+    setTimeout(() => {
+      setBannerNotif(current => (current?.id === newNotif.id ? null : current));
+    }, 6000);
+
+    // 4. Trigger native browser notification if granted
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') {
+        try {
+          const n = new Notification(`میانجی | ${title}`, {
+            body,
+            icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%231D4ED8"><path d="M12 2L3 7v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V13H5V8.26l7-3.89v8.62z"/></svg>',
+            dir: 'rtl',
+            lang: 'fa'
+          });
+          n.onclick = () => {
+            window.focus();
+            if (contractId) {
+              const target = contracts.find(x => x.contract_id === contractId);
+              if (target) {
+                setSelectedContract(target);
+                setActiveTab('contracts');
+              }
+            }
+          };
+        } catch (err) {
+          // Graceful ignore inside sandboxed iframes
+        }
+      }
+    }
+
+    // 5. Telegram WebApp haptic vibration if available
+    try {
+      const tg = (window as any).Telegram?.WebApp;
+      if (tg?.HapticFeedback) {
+        tg.HapticFeedback.notificationOccurred('success');
+      }
+    } catch (e) {
+      // Ignore
+    }
+  };
+
+  // Request native browser notification permission
+  const requestBrowserNotificationPermission = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      showToast('مرورگر شما از اعلان‌های سیستمی پشتیبانی نمی‌کند، اما اعلان‌های درون‌برنامه‌ای فعال هستند.');
+      return;
+    }
+
+    try {
+      const perm = await Notification.requestPermission();
+      setBrowserPerm(perm);
+      if (perm === 'granted') {
+        showToast('🔔 مجوز اعلان‌های مرورگر فعال گردید.');
+        triggerNotification('اعلان‌های مرورگر فعال شد', 'از این پس تغییرات قراردادها و پیام‌های جدید با اعلان مرورگر به شما اطلاع داده می‌شود.', 'status_change');
+      } else {
+        showToast('مجوز اعلان رد شد. می‌توانید از اعلان‌های درون‌برنامه‌ای استفاده فرمایید.');
+      }
+    } catch (e) {
+      showToast('عدم دسترسی به تنظیمات اعلان مرورگر');
+    }
+  };
+
+  // Mark all notifications as read
+  const markAllNotificationsAsRead = () => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    showToast('تمامی اعلان‌ها خوانده شدند.');
+  };
+
+  // Clear all notifications
+  const clearAllNotifications = () => {
+    setNotifications([]);
+    showToast('لیست اعلان‌ها پاک شد.');
+  };
+
+  // Test simulation for contract status change and chat messages
+  const simulateTestNotification = () => {
+    const sampleEvents = [
+      {
+        title: 'پیام جدید از طرف قرارداد',
+        body: 'حسین سهرابی (مجری): نسخه آزمایشی ربات و پیش‌نمایش در تلگرام آماده تست کارفرماست.',
+        type: 'message' as const,
+        contractId: 'DEV-842-109'
+      },
+      {
+        title: 'تغییر وضعیت به در انتظار پرداخت',
+        body: 'طرف دوم قرارداد هویت بصری را تایید و امضا کرد. پروژه در انتظار تامین وجه اسکرو است.',
+        type: 'status_change' as const,
+        contractId: 'DS-419-702'
+      },
+      {
+        title: 'واریز امن به صندوق اسکرو',
+        body: 'مبلغ ۱۵,۰۰۰,۰۰۰ تومان در صندوق امانت قفل شد و قرارداد فعال گردید.',
+        type: 'escrow' as const,
+        contractId: 'DEV-842-109'
+      },
+      {
+        title: 'پیام رسمی داور حقوقی',
+        body: 'داور رسمی میانجی: شواهد بررسی شد، طرفین توافق کردند خروجی‌ها با یک مرحله ویرایش تحویل گردند.',
+        type: 'arbitration' as const,
+        contractId: 'DS-419-702'
+      }
+    ];
+
+    const randomEvt = sampleEvents[Math.floor(Math.random() * sampleEvents.length)];
+    triggerNotification(randomEvt.title, randomEvt.body, randomEvt.type, randomEvt.contractId);
   };
 
   // Check if running inside actual Telegram WebApp
@@ -354,6 +549,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         showToast('✅ وجه در صندوق اسکرو میانجی قفل شد و پروژه آغاز گردید.');
+        triggerNotification('تغییر وضعیت به فعال (قفل اسکرو)', `مبلغ معامله در صندوق امانت قفل شد و پروژه ${contractId} وارد فاز اجرایی شد.`, 'escrow', contractId);
         loadInitialData();
         if (selectedContract) setSelectedContract(data.contract);
       } else {
@@ -367,8 +563,9 @@ export default function App() {
   // Submit Deliverables
   const handleDeliverSubmit = async () => {
     if (!showDeliverModal) return;
+    const cid = showDeliverModal.contract_id;
     try {
-      const res = await fetch(`/api/contracts/${showDeliverModal.contract_id}/deliver`, {
+      const res = await fetch(`/api/contracts/${cid}/deliver`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -379,6 +576,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         showToast('📦 خروجی‌های پروژه برای کارفرما ارسال گردید.');
+        triggerNotification('خروجی‌های کار تحویل شد', `مجری فایل‌ها و گزارش نهایی پروژه ${cid} را بارگذاری کرد و در انتظار بررسی شماست.`, 'status_change', cid);
         setShowDeliverModal(null);
         setDeliverNotes('');
         setDeliverLink('');
@@ -398,6 +596,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         showToast('🏁 تایید نهایی انجام شد و مبلغ به کیف پول مجری تسویه گردید.');
+        triggerNotification('تایید نهایی و آزادسازی وجه اسکرو', `قرارداد ${contractId} با موفقیت تایید و مبلغ به کیف پول مجری واریز گردید.`, 'escrow', contractId);
         loadInitialData();
         if (selectedContract) setSelectedContract(data.contract);
       }
@@ -414,6 +613,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         showToast('قرارداد لغو گردید و وجه به موجودی شما بازگشت.');
+        triggerNotification('لغو قرارداد معامله', `قرارداد ${contractId} لغو شد و مبالغ پرداختی عودت داده شد.`, 'status_change', contractId);
         loadInitialData();
         if (selectedContract) setSelectedContract(data.contract);
       }
@@ -425,12 +625,13 @@ export default function App() {
   // Submit Dispute
   const handleSubmitDispute = async () => {
     if (!showDisputeModal) return;
+    const cid = showDisputeModal.contract_id;
     try {
       const res = await fetch('/api/disputes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contract_id: showDisputeModal.contract_id,
+          contract_id: cid,
           reason: disputeReason,
           description: disputeDetails
         })
@@ -438,6 +639,7 @@ export default function App() {
       const data = await res.json();
       if (data.id) {
         showToast('⚖️ پرونده اختلاف با موفقیت ثبت شد و به داوری ارجاع داده شد.');
+        triggerNotification('ثبت پرونده اختلاف جدید', `پرونده داوری برای معامله ${cid} تشکیل شد و به داور ارجاع گردید.`, 'arbitration', cid);
         setShowDisputeModal(null);
         setDisputeDetails('');
         loadInitialData();
@@ -452,11 +654,12 @@ export default function App() {
   // Send Dispute Message
   const handleSendDisputeMessage = async () => {
     if (!selectedDispute || !newDisputeMsg.trim()) return;
+    const msgText = newDisputeMsg.trim();
     try {
       const res = await fetch(`/api/disputes/${selectedDispute.id}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: newDisputeMsg })
+        body: JSON.stringify({ text: msgText })
       });
       const msg = await res.json();
       if (msg.id) {
@@ -464,6 +667,7 @@ export default function App() {
           ...selectedDispute,
           messages: [...selectedDispute.messages, msg]
         });
+        triggerNotification('پیام جدید در پرونده داوری', `${currentUser?.full_name}: ${msgText.slice(0, 60)}...`, 'message', selectedDispute.contract_id);
         setNewDisputeMsg('');
         loadInitialData();
       }
@@ -682,6 +886,62 @@ export default function App() {
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-slate-700 animate-in fade-in slide-in-from-top-4 duration-200 max-w-md w-full">
           <Info className="w-5 h-5 text-blue-400 shrink-0" />
           <p className="text-sm font-medium">{toastMessage}</p>
+        </div>
+      )}
+
+      {/* Floating Browser Notification Card (Banner) */}
+      {bannerNotif && (
+        <div className="fixed top-6 right-6 z-50 max-w-sm w-full bg-white border-2 border-blue-600 rounded-2xl shadow-2xl p-4 animate-in slide-in-from-top-6 fade-in duration-300">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <div className="p-2 bg-blue-100 text-blue-700 rounded-xl shrink-0 mt-0.5">
+                <BellRing className="w-5 h-5 animate-bounce" />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-bold text-slate-900">{bannerNotif.title}</span>
+                  {bannerNotif.contractId && (
+                    <span className="text-[10px] font-mono font-bold bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">
+                      #{bannerNotif.contractId}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">{bannerNotif.body}</p>
+                <span className="text-[10px] text-slate-400 mt-1 block">اعلان مرورگر • {bannerNotif.timestamp}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setBannerNotif(null)}
+              className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition shrink-0"
+              title="بستن"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-end gap-2">
+            {bannerNotif.contractId && (
+              <button
+                onClick={() => {
+                  const target = contracts.find(x => x.contract_id === bannerNotif.contractId);
+                  if (target) {
+                    setSelectedContract(target);
+                    setActiveTab(bannerNotif.type === 'arbitration' ? 'disputes' : 'contracts');
+                  }
+                  setBannerNotif(null);
+                }}
+                className="text-xs text-blue-700 hover:text-blue-800 font-bold px-3 py-1 bg-blue-50 hover:bg-blue-100 rounded-lg transition"
+              >
+                مشاهده قرارداد / پرونده
+              </button>
+            )}
+            <button
+              onClick={() => setBannerNotif(null)}
+              className="text-xs text-slate-500 hover:text-slate-700 px-2.5 py-1 rounded-lg transition"
+            >
+              متوجه شدم
+            </button>
+          </div>
         </div>
       )}
 
@@ -1735,8 +1995,141 @@ export default function App() {
               </div>
             </div>
 
-            {/* User Quick Info */}
-            <div className="flex items-center gap-3">
+            {/* Header Actions: Notification Bell & User Profile */}
+            <div className="flex items-center gap-2.5">
+              {/* Notification Bell Dropdown Trigger */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                  className={`p-2 rounded-xl border transition relative flex items-center justify-center ${
+                    showNotifDropdown
+                      ? 'bg-blue-50 border-blue-600 text-blue-700 shadow-xs'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:text-blue-700 hover:bg-blue-50'
+                  }`}
+                  title="اعلان‌ها و رویدادهای زنده"
+                >
+                  <Bell className="w-4 h-4" />
+                  {notifications.some(n => !n.read) && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white rounded-full text-[9px] font-bold flex items-center justify-center shadow-xs animate-pulse">
+                      {notifications.filter(n => !n.read).length}
+                    </span>
+                  )}
+                </button>
+
+                {/* Notification Dropdown Panel */}
+                {showNotifDropdown && (
+                  <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-80 sm:w-96 bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                    <div className="p-3.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-900 text-xs">اعلان‌های سامانه میانجی</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                          {notifications.filter(n => !n.read).length} جدید
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={markAllNotificationsAsRead}
+                          className="text-[11px] text-blue-700 hover:underline font-medium"
+                        >
+                          خوانده شد
+                        </button>
+                        <button
+                          onClick={() => setShowNotifDropdown(false)}
+                          className="text-slate-400 hover:text-slate-600 p-0.5"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Browser Notification Permission Banner (if not granted) */}
+                    {browserPerm !== 'granted' && (
+                      <div className="p-3 bg-blue-50 border-b border-blue-100 flex items-center justify-between gap-2">
+                        <div className="text-[11px] text-blue-900 leading-tight">
+                          <strong>فعال‌سازی اعلان مرورگر</strong>
+                          <span className="block text-slate-500 text-[10px]">دریافت پیام و تغییر وضعیت قرارداد حتی در تب‌های دیگر</span>
+                        </div>
+                        <button
+                          onClick={requestBrowserNotificationPermission}
+                          className="px-2.5 py-1 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-[10px] font-bold shrink-0 transition"
+                        >
+                          فعال‌سازی
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Simulation Button for testing live events */}
+                    <div className="p-2 bg-slate-100/70 border-b border-slate-100 flex items-center justify-between">
+                      <span className="text-[10px] text-slate-500 font-medium">شبیه‌سازی اعلان زنده:</span>
+                      <button
+                        onClick={simulateTestNotification}
+                        className="text-[10px] bg-white border border-slate-200 hover:bg-slate-50 text-blue-700 font-bold px-2.5 py-1 rounded-md transition flex items-center gap-1 shadow-xs"
+                      >
+                        <Volume2 className="w-3 h-3 text-blue-600" />
+                        تست اعلان پیام / وضعیت
+                      </button>
+                    </div>
+
+                    {/* Notification List */}
+                    <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+                      {notifications.length === 0 ? (
+                        <div className="p-6 text-center text-slate-400 text-xs">
+                          هیچ اعلانی ثبت نشده است.
+                        </div>
+                      ) : (
+                        notifications.map((n) => (
+                          <div
+                            key={n.id}
+                            onClick={() => {
+                              setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x));
+                              if (n.contractId) {
+                                const target = contracts.find(x => x.contract_id === n.contractId);
+                                if (target) {
+                                  setSelectedContract(target);
+                                  setActiveTab(n.type === 'arbitration' ? 'disputes' : 'contracts');
+                                  setShowNotifDropdown(false);
+                                }
+                              }
+                            }}
+                            className={`p-3 hover:bg-slate-50 transition cursor-pointer flex items-start gap-2.5 ${
+                              !n.read ? 'bg-blue-50/40' : ''
+                            }`}
+                          >
+                            <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                              !n.read ? 'bg-blue-600' : 'bg-transparent'
+                            }`} />
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between gap-1 mb-0.5">
+                                <span className="font-bold text-slate-800 text-xs">{n.title}</span>
+                                <span className="text-[10px] text-slate-400">{n.timestamp}</span>
+                              </div>
+                              <p className="text-xs text-slate-600 leading-relaxed">{n.body}</p>
+                              {n.contractId && (
+                                <span className="inline-block mt-1 font-mono text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                                  #{n.contractId}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {notifications.length > 0 && (
+                      <div className="p-2 border-t border-slate-100 bg-slate-50 text-center">
+                        <button
+                          onClick={clearAllNotifications}
+                          className="text-[10px] text-slate-500 hover:text-rose-600 font-medium"
+                        >
+                          پاک کردن لیست اعلان‌ها
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* User Quick Info */}
               <div className="hidden sm:flex flex-col text-left">
                 <span className="text-xs font-bold text-slate-800">{currentUser?.full_name}</span>
                 <span className="text-[10px] text-emerald-600 font-medium">احراز شده (سطح {currentUser?.kyc_level})</span>
