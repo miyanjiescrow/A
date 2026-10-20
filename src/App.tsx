@@ -61,128 +61,11 @@ import {
 // Type Definitions
 // ====================================================
 
-interface UserProfile {
-  id: number;
-  telegram_id?: number;
-  full_name: string;
-  phone_number: string;
-  national_id?: string;
-  sheba?: string;
-  role: 'employer' | 'freelancer' | 'arbitrator';
-  wallet_balance: number;
-  escrow_locked_balance: number;
-  kyc_level: 'basic' | 'silver' | 'gold';
-  kyc_status: 'unverified' | 'pending' | 'verified' | 'rejected';
-  referral_code: string;
-  created_at: string;
-}
-
-interface Contract {
-  id: string;
-  contract_id: string;
-  title: string;
-  amount: number;
-  category: 'DEV' | 'DS' | 'CNT' | 'MKT' | 'GEN';
-  deadline: number;
-  description: string;
-  free_edits: number;
-  free_edits_left: number;
-  commission_payer: 'freelancer' | 'employer' | 'split';
-  creator_id: number;
-  created_by: number;
-  status: 'draft' | 'pending_party_b' | 'awaiting_payment' | 'awaiting_receipt_approval' | 'active' | 'work_submitted' | 'completed' | 'cancelled' | 'in_dispute';
-  buyer_id?: number;
-  buyer_fullname?: string;
-  buyer_phone?: string;
-  buyer_national_id?: string;
-  buyer_signed_at?: string;
-  seller_id?: number;
-  seller_fullname?: string;
-  seller_phone?: string;
-  seller_national_id?: string;
-  seller_signed_at?: string;
-  deliverables?: {
-    notes?: string;
-    links?: string[];
-    submitted_at?: string;
-  };
-  dispute_id?: string;
-  history: Array<{ event: string; timestamp: string; actor?: string }>;
-  created_at: string;
-}
-
-interface WalletTransaction {
-  id: string;
-  user_id: number;
-  type: 'deposit' | 'withdraw' | 'escrow_lock' | 'escrow_release' | 'commission' | 'affiliate_reward' | 'refund';
-  amount: number;
-  title: string;
-  status: 'completed' | 'pending' | 'rejected';
-  ref_id: string;
-  contract_id?: string;
-  created_at: string;
-}
-
-interface DisputeMessage {
-  id: string;
-  sender_id: number;
-  sender_name: string;
-  sender_role: 'buyer' | 'seller' | 'arbitrator';
-  text: string;
-  attachment?: string;
-  timestamp: string;
-}
-
-interface DisputeCase {
-  id: string;
-  contract_id: string;
-  contract_title: string;
-  claimant_id: number;
-  claimant_name: string;
-  reason: string;
-  description: string;
-  evidence_files: string[];
-  status: 'under_review' | 'evidence_gathering' | 'arbitration_decision' | 'resolved';
-  ruling?: {
-    decision: 'refund_buyer' | 'pay_seller' | 'split_50_50';
-    arbitrator_name: string;
-    comment: string;
-    resolved_at: string;
-  };
-  messages: DisputeMessage[];
-  created_at: string;
-}
-
-interface AffiliateStats {
-  referral_code: string;
-  referral_link: string;
-  total_clicks: number;
-  total_invited: number;
-  active_traders: number;
-  total_commission_earned: number;
-  withdrawable_commission: number;
-  commission_rate_percent: number;
-  referral_history: Array<{
-    user_name: string;
-    signed_up_at: string;
-    contracts_count: number;
-    earned_amount: number;
-  }>;
-}
-
-export interface AppNotification {
-  id: string;
-  title: string;
-  body: string;
-  type: 'message' | 'status_change' | 'escrow' | 'arbitration';
-  contractId?: string;
-  timestamp: string;
-  read: boolean;
-}
+import { UserProfile, Contract, WalletTransaction, DisputeMessage, DisputeCase, AffiliateStats, AppNotification } from './types';
 
 export default function App() {
   // Navigation & View Mode
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'contracts' | 'new_contract' | 'services' | 'profile'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'contracts' | 'new_contract' | 'services' | 'profile' | 'admin'>('dashboard');
   const [servicesSubTab, setServicesSubTab] = useState<'disputes' | 'affiliate'>('disputes');
   const [profileSubTab, setProfileSubTab] = useState<'kyc' | 'telegram_sync' | 'roles'>('kyc');
   const [viewMode, setViewMode] = useState<'desktop' | 'telegram'>('desktop');
@@ -219,19 +102,7 @@ export default function App() {
     });
   };
 
-  // Telegram Bot Live Sync Simulator Modal
-  const [showBotSimulator, setShowBotSimulator] = useState(false);
-  const [botChatMessages, setBotChatMessages] = useState<Array<{ sender: 'bot' | 'user'; text: string; time: string; buttons?: string[] }>>([
-    {
-      sender: 'bot',
-      text: '👋 سلام! به سامانه رسمی اسکرو میانجی (Miyanji Escrow Bot) خوش آمدید.\nتمامی تراکنش‌ها و قراردادهای شما با وب‌اپلیکیشن به صورت بلادرنگ و دوطرفه هماهنگ است.',
-      time: 'هم‌اکنون',
-      buttons: ['🤝 ثبت معامله جدید', '📜 لیست معاملات من', '📁 پیش‌نویس‌های من', '💳 کیف پول و اعتبار', '👤 پروفایل و احراز هویت', '💎 پنل سفیران']
-    }
-  ]);
-  const [botInput, setBotInput] = useState('');
-
-  // Notification States
+  // Notifications
   const [notifications, setNotifications] = useState<AppNotification[]>([
     {
       id: 'notif_1',
@@ -294,19 +165,26 @@ export default function App() {
   const [newDisputeMsg, setNewDisputeMsg] = useState('');
 
   // New Contract Form State
-  const [newContractForm, setNewContractForm] = useState({
-    title: '',
-    role: 'employer',
-    counterparty_name: '',
-    counterparty_phone: '',
-    amount: '',
-    deadline: '7',
-    category: 'DEV' as 'DEV' | 'DS' | 'CNT' | 'MKT' | 'GEN',
-    commission_payer: 'freelancer' as 'freelancer' | 'employer' | 'split',
-    free_edits: '2',
-    description: '',
-    as_draft: false
+  const [newContractForm, setNewContractForm] = useState(() => {
+    const saved = localStorage.getItem('miyanji_new_contract_form');
+    return saved ? JSON.parse(saved) : {
+      title: '',
+      role: 'employer',
+      counterparty_name: '',
+      counterparty_phone: '',
+      amount: '',
+      deadline: '7',
+      category: 'DEV' as 'DEV' | 'DS' | 'CNT' | 'MKT' | 'GEN',
+      commission_payer: 'freelancer' as 'freelancer' | 'employer' | 'split',
+      free_edits: '2',
+      description: '',
+      as_draft: false
+    };
   });
+
+  useEffect(() => {
+    localStorage.setItem('miyanji_new_contract_form', JSON.stringify(newContractForm));
+  }, [newContractForm]);
 
   // KYC Multi-Step Wizard State
   const [kycStep, setKycStep] = useState<number>(1);
@@ -574,38 +452,7 @@ export default function App() {
 
   // Handle Telegram Bot Simulated Commands
   const handleBotCommand = async (cmd: string) => {
-    if (!cmd.trim()) return;
-    const userMsg = cmd.trim();
-    const timeStr = new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
-    setBotChatMessages(prev => [...prev, { sender: 'user', text: userMsg, time: timeStr }]);
-    setBotInput('');
-
-    try {
-      const res = await fetch('/api/bot/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: userMsg })
-      });
-      const data = await res.json();
-      setBotChatMessages(prev => [
-        ...prev,
-        {
-          sender: 'bot',
-          text: data.reply || 'دستور با موفقیت در دیتابیس هماهنگ شد.',
-          time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' }),
-          buttons: data.keyboard ? data.keyboard.flat() : undefined
-        }
-      ]);
-    } catch (e) {
-      setBotChatMessages(prev => [
-        ...prev,
-        {
-          sender: 'bot',
-          text: `پیام دریافت شد: "${userMsg}"\nتغییرات در وب‌اپلیکیشن به صورت آنلاین اعمال گردید.`,
-          time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
-        }
-      ]);
-    }
+    // Removed bot simulator
   };
 
   // Deposit Action
@@ -854,6 +701,7 @@ export default function App() {
       if (data.contract_id) {
         showToast(newContractForm.as_draft ? 'پیش‌نویس ذخیره شد.' : 'قرارداد ثبت شد و برای طرف دوم ارسال گردید.');
         triggerNotification('قرارداد جدید ثبت شد', `قرارداد ${data.contract_id} ایجاد و لینک امضا صادر گردید.`, 'status_change', data.contract_id);
+        localStorage.removeItem('miyanji_new_contract_form');
         setNewContractForm({
           title: '',
           role: 'employer',
@@ -1989,6 +1837,23 @@ export default function App() {
               </div>
             )
           )}
+        </div>
+      )}
+
+      {/* Admin Panel Tab (Visible only to Admin) */}
+      {activeTab === 'admin' && currentUser?.role === 'admin' && (
+        <div className="max-w-5xl mx-auto p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-6">پنل مدیریت سیستم</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl">
+              <h3 className="font-bold text-slate-700 dark:text-slate-300">آمار کلی کاربران</h3>
+              <p className="text-sm text-slate-500">تعداد کل کاربران: {users.length}</p>
+            </div>
+            <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl">
+              <h3 className="font-bold text-slate-700 dark:text-slate-300">مدیریت قراردادها</h3>
+              <p className="text-sm text-slate-500">تعداد کل قراردادها: {contracts.length}</p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -3236,87 +3101,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Telegram Bot Simulator Modal (Demonstrating 100% Real-Time Web & Bot Sync) */}
-      {showBotSimulator && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-[#17212B] text-white rounded-3xl max-w-md w-full h-[620px] flex flex-col shadow-2xl border border-slate-700 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* Telegram Chat Header */}
-            <div className="bg-[#242F3D] px-4 py-3 flex items-center justify-between border-b border-slate-700">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold">
-                  <Shield className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <strong className="text-xs text-white">Miyanji Escrow Bot</strong>
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                  </div>
-                  <span className="text-[10px] text-slate-400 block">@MiyanjiBot • bot</span>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowBotSimulator(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg"
-              >
-                ✕
-              </button>
-            </div>
 
-            {/* Chat Messages Feed */}
-            <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-[#0E1621]">
-              <div className="text-center text-[10px] text-slate-500 bg-slate-800/50 py-1 px-3 rounded-full mx-auto w-fit">
-                همگام با وب‌اپلیکیشن میانجی • داده‌های لحظه‌ای دیتابیس
-              </div>
 
-              {botChatMessages.map((m, idx) => (
-                <div
-                  key={idx}
-                  className={`flex flex-col max-w-[85%] ${
-                    m.sender === 'user' ? 'mr-auto bg-[#2B5278] rounded-2xl rounded-br-xs p-3 text-white' : 'ml-auto bg-[#182533] rounded-2xl rounded-bl-xs p-3 text-slate-200'
-                  }`}
-                >
-                  <p className="text-xs whitespace-pre-line leading-relaxed">{m.text}</p>
-                  <span className="text-[9px] text-slate-400 text-left mt-1 block">{m.time}</span>
-
-                  {m.buttons && (
-                    <div className="grid grid-cols-2 gap-1.5 mt-2.5 pt-2 border-t border-slate-700">
-                      {m.buttons.map((btn, bIdx) => (
-                        <button
-                          key={bIdx}
-                          onClick={() => handleBotCommand(btn)}
-                          className="text-[11px] bg-[#242F3D] hover:bg-[#2e3b4d] text-sky-400 py-1.5 px-2 rounded-lg font-medium transition text-center"
-                        >
-                          {btn}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Telegram Reply Keyboard & Input Bar */}
-            <div className="p-3 bg-[#242F3D] border-t border-slate-700">
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="ارسال پیام یا دستور به ربات..."
-                  value={botInput}
-                  onChange={(e) => setBotInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleBotCommand(botInput)}
-                  className="flex-1 bg-[#17212B] border border-slate-600 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-sky-500"
-                />
-                <button
-                  onClick={() => handleBotCommand(botInput)}
-                  className="bg-sky-500 hover:bg-sky-600 text-white p-2.5 rounded-xl transition"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Deposit Modal */}
       {showDepositModal && (
