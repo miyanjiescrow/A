@@ -18,9 +18,9 @@ fi
 echo "📥 Installing dependencies from requirements.txt..."
 python3 -m pip install -r requirements.txt --user
 
-# Run the bot in the background
+# Run the bot in the background using nohup and log to bot.log
 echo "🤖 Starting main.py in background..."
-python3 main.py &
+nohup python3 main.py > bot.log 2>&1 &
 
 # Run the web app in the foreground
 echo "🚀 Starting Node.js server..."
