@@ -1802,8 +1802,8 @@ export default function App() {
                             {d.status === 'resolved' ? 'رأی صادر شد' : 'در دست بررسی داور'}
                           </span>
                         </div>
-                        <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 line-clamp-1">{d.contract_title}</h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 line-clamp-1">شاکی: {d.claimant_name}</p>
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate-text">{d.contract_title}</h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 truncate-text">شاکی: {d.claimant_name}</p>
                       </div>
                     ))}
                   </div>
@@ -3112,7 +3112,7 @@ export default function App() {
                       {getStatusBadge(selectedContract.status).text}
                     </span>
                   </div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-1 line-clamp-1">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-1 truncate-text">
                     {selectedContract.title}
                   </h3>
                 </div>
