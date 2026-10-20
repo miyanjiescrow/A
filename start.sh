@@ -18,6 +18,10 @@ fi
 echo "📥 Installing dependencies from requirements.txt..."
 python3 -m pip install -r requirements.txt --user
 
-# Run the app
-echo "🚀 Starting main.py..."
-python3 main.py
+# Run the bot in the background
+echo "🤖 Starting main.py in background..."
+python3 main.py &
+
+# Run the web app in the foreground
+echo "🚀 Starting Node.js server..."
+npm run start

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build": "pip install -r requirements.txt && vite build",
     "start": "NODE_ENV=production tsx server.ts"
   },
   "engines": {
