@@ -1,0 +1,37 @@
+{
+  "name": "miyanji-escrow-platform",
+  "version": "1.0.0",
+  "description": "سامانه هوشمند واسطه‌گری امن و ثبت قراردادهای الکترونیک میانجی",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "pip install -r requirements.txt && vite build",
+    "start": "NODE_ENV=production tsx server.ts"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "lucide-react": "^1.52.0",
+    "pdf-lib": "^1.17.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.30",
+    "tailwindcss": "^4.3.3",
+    "vite": "^5.4.2"
+  }
+}

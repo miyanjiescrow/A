@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>سامانه واسطه‌گری امن و اسکرو میانجی | Miyanji Escrow</title>
+    <meta name="description" content="سامانه جامع واسطه‌گری امن معاملات و ثبت رسمی قراردادهای الکترونیک (وبسایت و تلگرام مینی‌اپ)" />
+    <meta property="og:title" content="Miyanji Escrow - سامانه هوشمند واسطه‌گری میانجی" />
+    <meta property="og:description" content="پلتفرم پرداخت امن، داوری حقوقی و قراردادهای دیجیتال تحت پوشش اسکرو میانجی" />
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Initialize Dark/Light Theme from localStorage / system preference -->
+    <script>
+      (function() {
+        try {
+          const savedTheme = localStorage.getItem('miyanji_theme');
+          const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (savedTheme === 'dark' || (!savedTheme && prefersDark)) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen antialiased selection:bg-blue-600 selection:text-white transition-colors duration-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
