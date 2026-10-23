@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "pip install -r requirements.txt && vite build",
-    "start": "NODE_ENV=production tsx server.ts"
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx server.ts",
+    "test": "vitest"
   },
   "engines": {
     "node": ">=22.0.0"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
+    "@types/supertest": "^7.2.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
@@ -20,7 +22,9 @@
     "pdf-lib": "^1.17.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "tsx": "^4.23.15"
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "vitest": "^5.0.5"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
